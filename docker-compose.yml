@@ -46,10 +46,19 @@ services:
       --tensor-parallel-size 1
       --max-model-len 131072
       --gpu-memory-utilization 0.60
+      --attention-backend flashinfer
       --dtype bfloat16
       --enable-prefix-caching
+      --enable-chunked-prefill
+      --max-num-batched-tokens 8192
       --trust-remote-code
       --max-num-seqs 32
+      --kv-cache-dtype fp8_e5m2
+      --speculative-config '{
+        "model": "RedHatAI/gemma-4-26B-A4B-it-speculator.eagle3",
+        "num_speculative_tokens": 3,
+        "method": "eagle3"
+      }'
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -71,8 +80,12 @@ services:
       --tensor-parallel-size 1
       --max-model-len 65536
       --gpu-memory-utilization 0.15
+      --attention-backend flashinfer
       --dtype bfloat16
       --enable-prefix-caching
+      --kv-cache-dtype fp8_e5m2
+      --enable-chunked-prefill
+      --max-num-batched-tokens 4096
       --trust-remote-code
       --max-num-seqs 64
     healthcheck:
