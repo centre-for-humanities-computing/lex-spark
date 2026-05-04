@@ -1,0 +1,134 @@
+# docker-compose.yml
+name: dgx-inference
+
+# ── Shared GPU resource definition ───────────────────────────────────────────
+x-gpu-resources: &gpu-resources
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            capabilities: [gpu]
+
+# ── Shared Gemma 4 vLLM base (uses the special gemma4 image) ─────────────────
+x-vllm-gemma4: &vllm-gemma4
+  # IMPORTANT: Standard nvcr.io/nvidia/vllm image does NOT support Gemma 4.
+  # This custom build is required per the DGX Spark vLLM playbook.
+  image: vllm/vllm-openai:gemma4-cu130
+  restart: unless-stopped
+  environment:
+    - HF_TOKEN=${HF_TOKEN}
+    - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+    - HF_HOME=/model-cache
+  volumes:
+    - ${MODEL_CACHE_PATH}:/model-cache
+  ipc: host
+  ulimits:
+    memlock: -1
+    stack: 67108864
+  <<: *gpu-resources
+
+services:
+
+  # ── Gemma 4 26B A4B (MoE) — large/capable model ──────────────────────────
+  vllm-gemma-large:
+    <<: *vllm-gemma4
+    container_name: vllm-gemma-large
+    ports:
+      - "8001:8000"
+    # Note: gemma4 container takes the model ID as a positional argument,
+    # additional vLLM flags follow after.
+    command: >
+      ${GEMMA_LARGE_MODEL}
+      --served-model-name gemma-4-26B-A4B-it
+      --host 0.0.0.0
+      --port 8000
+      --tensor-parallel-size 1
+      --max-model-len 131072
+      --gpu-memory-utilization 0.60
+      --dtype bfloat16
+      --enable-prefix-caching
+      --trust-remote-code
+      --max-num-seqs 32
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 8
+      start_period: 180s   # MoE models take longer to load all expert weights
+
+  # ── Gemma 4 E4B (Dense) — fast/lightweight model ──────────────────────────
+  vllm-gemma-small:
+    <<: *vllm-gemma4
+    container_name: vllm-gemma-small
+    ports:
+      - "8002:8000"
+    command: >
+      ${GEMMA_SMALL_MODEL}
+      --served-model-name gemma-4-E4B-it
+      --host 0.0.0.0
+      --port 8000
+      --tensor-parallel-size 1
+      --max-model-len 65536
+      --gpu-memory-utilization 0.15
+      --dtype bfloat16
+      --enable-prefix-caching
+      --trust-remote-code
+      --max-num-seqs 64
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 8
+      start_period: 120s
+
+  # ── Infinity Embeddings Service (multi-model) ─────────────────────────────  
+  infinity-embeddings:
+    image: michaelf34/infinity:latest
+    container_name: infinity-embeddings
+    restart: unless-stopped
+    ports:
+      - "8003:7997"
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+      - HF_HOME=/app/.cache
+    volumes:
+      - ${MODEL_CACHE_PATH}:/app/.cache
+    command: >
+      v2
+      --model-id ${EMBED_MODEL_1}
+      --served-model-name multilingual-e5-large
+      --model-id ${EMBED_MODEL_2}
+      --served-model-name jina-v5-small
+      --port 7997
+      --host 0.0.0.0
+      --engine torch
+      --device cuda
+      --dtype bfloat16
+      --trust-remote-code true
+    <<: *gpu-resources
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7997/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+  # ─────────────────────────────────────────────
+  # NGINX Reverse Proxy
+  # ─────────────────────────────────────────────
+  nginx:
+    image: nginx:alpine
+    container_name: nginx-proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      vllm-gemma-large:
+        condition: service_healthy
+      vllm-gemma-small:
+        condition: service_healthy
+      infinity-embeddings:
+        condition: service_healthy
