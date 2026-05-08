@@ -151,7 +151,7 @@ services:
       --engine torch
       --device cuda
       --dtype bfloat16
-      --trust-remote-code true
+      --trust-remote-code
     <<: *gpu-resources
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:7997/health"]
