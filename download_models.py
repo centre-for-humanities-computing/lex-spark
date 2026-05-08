@@ -8,6 +8,7 @@ if __name__ == "__main__":
     models = [
         "google/gemma-4-26B-A4B-it",        
         "google/gemma-4-E4B-it",        
+        "google/gemma-4-E2B-it",
         "intfloat/multilingual-e5-large",
         "jinaai/jina-embeddings-v5-text-small", 
     ]
