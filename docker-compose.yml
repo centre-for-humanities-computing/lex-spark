@@ -124,39 +124,39 @@ services:
       retries: 8
       start_period: 90s
 
-# ── Infinity Embeddings Service (multi-model) — ARM64 DGX Spark ───────────────
-infinity-embeddings:
-  image: michaelf34/infinity:latest-cpu  # ARM64-compatible CPU image
-  container_name: infinity-embeddings
-  restart: unless-stopped
-  ports:
-    - "8003:7997"
-  environment:
-    - HF_TOKEN=${HF_TOKEN}
-    - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
-    - HF_HOME=/app/.cache
-    - INFINITY_ANONYMOUS_USAGE_STATS=0  # Disable telemetry
-  volumes:
-    - ${MODEL_CACHE_PATH}:/app/.cache
-  command: >
-    v2
-    --model-id ${EMBED_MODEL_1}
-    --served-model-name multilingual-e5-large
-    --model-id ${EMBED_MODEL_2}
-    --served-model-name jina-v5-small
-    --port 7997
-    --host 0.0.0.0
-    --engine torch
-    --device cuda                    # Still uses CUDA via NVIDIA runtime
-    --dtype bfloat16
-    --trust-remote-code true
-  <<: *gpu-resources
-  healthcheck:
-    test: ["CMD", "curl", "-f", "http://localhost:7997/health"]
-    interval: 30s
-    timeout: 10s
-    retries: 5
-    start_period: 120s  # Increased for model loading
+  # ── Infinity Embeddings Service (multi-model) — ARM64 DGX Spark ───────────────
+  infinity-embeddings:
+    image: michaelf34/infinity:latest-cpu  # ARM64-compatible CPU image
+    container_name: infinity-embeddings
+    restart: unless-stopped
+    ports:
+      - "8003:7997"
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+      - HF_HOME=/app/.cache
+      - INFINITY_ANONYMOUS_USAGE_STATS=0  # Disable telemetry
+    volumes:
+      - ${MODEL_CACHE_PATH}:/app/.cache
+    command: >
+      v2
+      --model-id ${EMBED_MODEL_1}
+      --served-model-name multilingual-e5-large
+      --model-id ${EMBED_MODEL_2}
+      --served-model-name jina-v5-small
+      --port 7997
+      --host 0.0.0.0
+      --engine torch
+      --device cuda                    # Still uses CUDA via NVIDIA runtime
+      --dtype bfloat16
+      --trust-remote-code true
+    <<: *gpu-resources
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7997/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s  # Increased for model loading
 
   # ─────────────────────────────────────────────
   # NGINX Reverse Proxy
