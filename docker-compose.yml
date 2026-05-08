@@ -127,7 +127,7 @@ services:
   # ── Infinity Embeddings Service (multi-model) — ARM64 DGX Spark ───────────────
   infinity-embeddings:
     build:
-      context: .
+      context: ./infinity-arm64
       dockerfile: Dockerfile
     image: infinity-arm64:local
     container_name: infinity-embeddings
