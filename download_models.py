@@ -6,7 +6,7 @@ if __name__ == "__main__":
     cache = "./models"
 
     models = [
-        "google/gemma-4-26B-A4B-it",        
+        "bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4A16",
         "google/gemma-4-E4B-it",        
         "google/gemma-4-E2B-it",
         "intfloat/multilingual-e5-large",

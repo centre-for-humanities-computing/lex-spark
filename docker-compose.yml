@@ -45,7 +45,7 @@ services:
       --port 8000
       --tensor-parallel-size 1
       --max-model-len 131072
-      --gpu-memory-utilization 0.55
+      --gpu-memory-utilization 0.50
       --attention-backend flashinfer
       --dtype bfloat16
       --enable-prefix-caching
@@ -79,7 +79,7 @@ services:
       --port 8000
       --tensor-parallel-size 1
       --max-model-len 65536
-      --gpu-memory-utilization 0.14
+      --gpu-memory-utilization 0.15
       --attention-backend flashinfer
       --dtype bfloat16
       --enable-prefix-caching
@@ -102,13 +102,13 @@ services:
     ports:
       - "8004:8000"
     command: >
-      google/gemma-4-E2B-it
+      ${GEMMA_EXTRA_SMALL_MODEL}
       --served-model-name gemma-4-E2B-it
       --host 0.0.0.0
       --port 8000
       --tensor-parallel-size 1
       --max-model-len 32768
-      --gpu-memory-utilization 0.08
+      --gpu-memory-utilization 0.10
       --attention-backend flashinfer
       --dtype bfloat16
       --enable-prefix-caching
@@ -124,38 +124,40 @@ services:
       retries: 8
       start_period: 90s
 
-  # ── Infinity Embeddings Service (multi-model) ─────────────────────────────  
-  infinity-embeddings:
-    image: michaelf34/infinity:latest
-    container_name: infinity-embeddings
-    restart: unless-stopped
-    ports:
-      - "8003:7997"
-    environment:
-      - HF_TOKEN=${HF_TOKEN}
-      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
-      - HF_HOME=/app/.cache
-    volumes:
-      - ${MODEL_CACHE_PATH}:/app/.cache
-    command: >
-      v2
-      --model-id ${EMBED_MODEL_1}
-      --served-model-name multilingual-e5-large
-      --model-id ${EMBED_MODEL_2}
-      --served-model-name jina-v5-small
-      --port 7997
-      --host 0.0.0.0
-      --engine torch
-      --device cuda
-      --dtype bfloat16
-      --trust-remote-code true
-    <<: *gpu-resources
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:7997/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 90s
+# ── Infinity Embeddings Service (multi-model) — ARM64 DGX Spark ───────────────
+infinity-embeddings:
+  image: michaelf34/infinity:latest-cpu  # ARM64-compatible CPU image
+  container_name: infinity-embeddings
+  restart: unless-stopped
+  ports:
+    - "8003:7997"
+  environment:
+    - HF_TOKEN=${HF_TOKEN}
+    - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+    - HF_HOME=/app/.cache
+    - INFINITY_ANONYMOUS_USAGE_STATS=0  # Disable telemetry
+  volumes:
+    - ${MODEL_CACHE_PATH}:/app/.cache
+  command: >
+    v2
+    --model-id ${EMBED_MODEL_1}
+    --served-model-name multilingual-e5-large
+    --model-id ${EMBED_MODEL_2}
+    --served-model-name jina-v5-small
+    --port 7997
+    --host 0.0.0.0
+    --engine torch
+    --device cuda                    # Still uses CUDA via NVIDIA runtime
+    --dtype bfloat16
+    --trust-remote-code true
+  <<: *gpu-resources
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:7997/health"]
+    interval: 30s
+    timeout: 10s
+    retries: 5
+    start_period: 120s  # Increased for model loading
+
   # ─────────────────────────────────────────────
   # NGINX Reverse Proxy
   # ─────────────────────────────────────────────
