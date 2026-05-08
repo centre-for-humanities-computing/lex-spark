@@ -5,8 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Infinity (server/CLI)
-RUN python -m pip install --upgrade pip \
-    && pip install --no-cache-dir "infinity-emb[all]"
+RUN uv pip install --no-cache-dir "infinity-emb[all]"
 
 EXPOSE 7997
 
