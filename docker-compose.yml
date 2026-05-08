@@ -45,7 +45,7 @@ services:
       --port 8000
       --tensor-parallel-size 1
       --max-model-len 131072
-      --gpu-memory-utilization 0.60
+      --gpu-memory-utilization 0.55
       --attention-backend flashinfer
       --dtype bfloat16
       --enable-prefix-caching
@@ -79,7 +79,7 @@ services:
       --port 8000
       --tensor-parallel-size 1
       --max-model-len 65536
-      --gpu-memory-utilization 0.15
+      --gpu-memory-utilization 0.14
       --attention-backend flashinfer
       --dtype bfloat16
       --enable-prefix-caching
@@ -94,6 +94,35 @@ services:
       timeout: 10s
       retries: 8
       start_period: 120s
+
+  # ── Gemma 4 E2B (Dense) — extra small/fast model ──────────────────────────
+  vllm-gemma-extra-small:
+    <<: *vllm-gemma4
+    container_name: vllm-gemma-extra-small
+    ports:
+      - "8004:8000"
+    command: >
+      google/gemma-4-E2B-it
+      --served-model-name gemma-4-E2B-it
+      --host 0.0.0.0
+      --port 8000
+      --tensor-parallel-size 1
+      --max-model-len 32768
+      --gpu-memory-utilization 0.08
+      --attention-backend flashinfer
+      --dtype bfloat16
+      --enable-prefix-caching
+      --kv-cache-dtype fp8_e5m2
+      --enable-chunked-prefill
+      --max-num-batched-tokens 2048
+      --trust-remote-code
+      --max-num-seqs 128
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 8
+      start_period: 90s
 
   # ── Infinity Embeddings Service (multi-model) ─────────────────────────────  
   infinity-embeddings:
@@ -142,6 +171,8 @@ services:
       vllm-gemma-large:
         condition: service_healthy
       vllm-gemma-small:
+        condition: service_healthy
+      vllm-gemma-extra-small:
         condition: service_healthy
       infinity-embeddings:
         condition: service_healthy
