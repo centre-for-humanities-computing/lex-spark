@@ -6,13 +6,11 @@ if __name__ == "__main__":
     cache = "./models"
 
     models = [
+        # Gemma 4 models (served via vllm/vllm-openai:gemma4-cu130)
         "bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4A16",
-        "google/gemma-4-E4B-it",
         "google/gemma-4-E2B-it",
+        # Embedding models (served via nvcr.io/nvidia/vllm:26.02-py3)
         "intfloat/multilingual-e5-large",
-        # TEI requires the task-specific merged variant of jina-v5-small,
-        # NOT the base model. The base model uses LoRA adapters which TEI
-        # does not support. Use the retrieval variant for RAG/search use cases.
         "jinaai/jina-embeddings-v5-text-small-retrieval",
     ]
 

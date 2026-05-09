@@ -10,10 +10,10 @@ x-gpu-resources: &gpu-resources
           - driver: nvidia
             capabilities: [gpu]
 
-# ── Shared Gemma 4 vLLM base (uses the special gemma4 image) ─────────────────
+# ── Gemma 4 vLLM base ─────────────────────────────────────────────────────────
+# The gemma4-cu130 custom image is required for the Gemma 4 model family.
+# It does NOT support general embedding models.
 x-vllm-gemma4: &vllm-gemma4
-  # IMPORTANT: Standard nvcr.io/nvidia/vllm image does NOT support Gemma 4.
-  # This custom build is required per the DGX Spark vLLM playbook.
   image: vllm/vllm-openai:gemma4-cu130
   restart: unless-stopped
   environment:
@@ -28,18 +28,22 @@ x-vllm-gemma4: &vllm-gemma4
     stack: 67108864
   <<: *gpu-resources
 
-# ── Shared TEI base ───────────────────────────────────────────────────────────
-x-tei: &tei
-  # sm_121 = Blackwell/GH200 compute capability (DGX Spark Grace-Hopper).
-  # This image was added in TEI 1.9 specifically for DGX Spark support.
-  image: ghcr.io/huggingface/text-embeddings-inference:121-1.9
+# ── Standard NVIDIA vLLM base ─────────────────────────────────────────────────
+# Use the standard NGC image for non-Gemma models (embedding models, etc.)
+# Per the DGX Spark vLLM playbook: nvcr.io/nvidia/vllm:<latest_version>
+x-vllm-standard: &vllm-standard
+  image: nvcr.io/nvidia/vllm:26.02-py3
   restart: unless-stopped
   environment:
     - HF_TOKEN=${HF_TOKEN}
     - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
-    - HF_HOME=/data
+    - HF_HOME=/model-cache
   volumes:
-    - ${MODEL_CACHE_PATH}:/data
+    - ${MODEL_CACHE_PATH}:/model-cache
+  ipc: host
+  ulimits:
+    memlock: -1
+    stack: 67108864
   <<: *gpu-resources
 
 services:
@@ -48,6 +52,21 @@ services:
   vllm-gemma-large:
     <<: *vllm-gemma4
     container_name: vllm-gemma-large
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+      - HF_HOME=/model-cache
+      # Required for NVFP4 quantization: use Marlin kernel for non-MoE layers.
+      # Without this, GEMM operations fall back to an incorrect path on SM 12.1.
+      - VLLM_NVFP4_GEMM_BACKEND=marlin
+    volumes:
+      - ${MODEL_CACHE_PATH}:/model-cache
+      # The included gemma4_patched.py fixes vLLM's expert_params_mapping for
+      # NVFP4 scale keys. Download it from the model repo and place it alongside
+      # your docker-compose.yml. Without this patch, MoE scale keys are silently
+      # mis-mapped and outputs will be incorrect.
+      - ./gemma4_patched.py:/usr/local/lib/python3.12/dist-packages/gemma4_patched.py
+
     ports:
       - "8001:8000"
     command: >
@@ -59,12 +78,14 @@ services:
       --max-model-len 131072
       --gpu-memory-utilization 0.50
       --attention-backend flashinfer
-      --dtype bfloat16
+      --quantization modelopt
+      --dtype auto
       --enable-prefix-caching
       --enable-chunked-prefill
       --max-num-batched-tokens 8192
       --trust-remote-code
       --max-num-seqs 32
+      --moe-backend marlin
       --kv-cache-dtype fp8_e5m2
       --speculative-config '{
         "model": "RedHatAI/gemma-4-26B-A4B-it-speculator.eagle3",
@@ -78,36 +99,7 @@ services:
       retries: 8
       start_period: 180s
 
-  # ── Gemma 4 E4B (Dense) — fast/lightweight model ──────────────────────────
-  vllm-gemma-small:
-    <<: *vllm-gemma4
-    container_name: vllm-gemma-small
-    ports:
-      - "8002:8000"
-    command: >
-      ${GEMMA_SMALL_MODEL}
-      --served-model-name gemma-4-E4B-it
-      --host 0.0.0.0
-      --port 8000
-      --tensor-parallel-size 1
-      --max-model-len 65536
-      --gpu-memory-utilization 0.15
-      --attention-backend flashinfer
-      --dtype bfloat16
-      --enable-prefix-caching
-      --kv-cache-dtype fp8_e5m2
-      --enable-chunked-prefill
-      --max-num-batched-tokens 4096
-      --trust-remote-code
-      --max-num-seqs 64
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 8
-      start_period: 120s
-
-  # ── Gemma 4 E2B (Dense) — extra small/fast model ──────────────────────────
+  # ── Gemma 4 E2B (Dense) — fast/lightweight model ──────────────────────────
   vllm-gemma-extra-small:
     <<: *vllm-gemma4
     container_name: vllm-gemma-extra-small
@@ -122,7 +114,7 @@ services:
       --max-model-len 32768
       --gpu-memory-utilization 0.10
       --attention-backend flashinfer
-      --dtype bfloat16
+      --dtype auto
       --enable-prefix-caching
       --kv-cache-dtype fp8_e5m2
       --enable-chunked-prefill
@@ -136,42 +128,51 @@ services:
       retries: 8
       start_period: 90s
 
-  # ── TEI: multilingual-e5-large ────────────────────────────────────────────
-  tei-embed-e5:
-    <<: *tei
-    container_name: tei-embed-e5
+  # ── multilingual-e5-large embeddings ─────────────────────────────────────
+  vllm-embed-e5:
+    <<: *vllm-standard
+    container_name: vllm-embed-e5
     ports:
-      - "8003:80"
+      - "8003:8000"
     command: >
-      --model-id ${EMBED_MODEL_1}
+      vllm serve ${EMBED_MODEL_1}
       --served-model-name multilingual-e5-large
-      --dtype float16
-      --port 80
+      --host 0.0.0.0
+      --port 8000
+      --task embed
+      --dtype auto
+      --gpu-memory-utilization 0.08
+      --trust-remote-code
+      --max-model-len 512
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 90s
 
-  # ── TEI: jina-embeddings-v5-text-small (retrieval variant) ───────────────
-  tei-embed-jina:
-    <<: *tei
-    container_name: tei-embed-jina
+  # ── jina-embeddings-v5-small embeddings ───────────────────────────────────
+  vllm-embed-jina:
+    <<: *vllm-standard
+    container_name: vllm-embed-jina
     ports:
-      - "8005:80"
+      - "8005:8000"
     command: >
-      --model-id ${EMBED_MODEL_2}
+      vllm serve ${EMBED_MODEL_2}
       --served-model-name jina-v5-small
-      --dtype float16
-      --pooling last-token
-      --port 80
+      --host 0.0.0.0
+      --port 8000
+      --task embed
+      --dtype auto
+      --gpu-memory-utilization 0.08
+      --trust-remote-code
+      --max-model-len 32768
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 90s
+      start_period: 120s
 
   # ─────────────────────────────────────────────
   # NGINX Reverse Proxy
@@ -187,11 +188,9 @@ services:
     depends_on:
       vllm-gemma-large:
         condition: service_healthy
-      vllm-gemma-small:
-        condition: service_healthy
       vllm-gemma-extra-small:
         condition: service_healthy
-      tei-embed-e5:
+      vllm-embed-e5:
         condition: service_healthy
-      tei-embed-jina:
+      vllm-embed-jina:
         condition: service_healthy
