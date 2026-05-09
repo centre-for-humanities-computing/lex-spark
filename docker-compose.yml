@@ -29,10 +29,10 @@ x-vllm-gemma4: &vllm-gemma4
   <<: *gpu-resources
 
 # ── Standard NVIDIA vLLM base ─────────────────────────────────────────────────
-# Use the standard NGC image for non-Gemma models (embedding models, etc.)
-# Per the DGX Spark vLLM playbook: nvcr.io/nvidia/vllm:<latest_version>
+# 26.02-py3 requires driver >=590.48 — host has 580.142, use 25.12-py3 instead.
+# 25.12-py3 is based on CUDA 13.1.0 which is compatible with driver 580.x.
 x-vllm-standard: &vllm-standard
-  image: nvcr.io/nvidia/vllm:26.02-py3
+  image: nvcr.io/nvidia/vllm:25.12-py3
   restart: unless-stopped
   environment:
     - HF_TOKEN=${HF_TOKEN}
@@ -87,11 +87,6 @@ services:
       --max-num-seqs 32
       --moe-backend marlin
       --kv-cache-dtype fp8
-      --speculative-config '{
-        "model": "RedHatAI/gemma-4-26B-A4B-it-speculator.eagle3",
-        "num_speculative_tokens": 3,
-        "method": "eagle3"
-      }'
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -128,7 +123,6 @@ services:
       retries: 8
       start_period: 90s
 
-  # ── multilingual-e5-large embeddings ─────────────────────────────────────
   vllm-embed-e5:
     <<: *vllm-standard
     container_name: vllm-embed-e5
@@ -139,8 +133,8 @@ services:
       --served-model-name multilingual-e5-large
       --host 0.0.0.0
       --port 8000
-      --task embed
-      --dtype auto
+      --task embedding
+      --dtype bfloat16
       --gpu-memory-utilization 0.08
       --trust-remote-code
       --max-model-len 512
@@ -151,7 +145,6 @@ services:
       retries: 5
       start_period: 90s
 
-  # ── jina-embeddings-v5-small embeddings ───────────────────────────────────
   vllm-embed-jina:
     <<: *vllm-standard
     container_name: vllm-embed-jina
@@ -162,8 +155,8 @@ services:
       --served-model-name jina-v5-small
       --host 0.0.0.0
       --port 8000
-      --task embed
-      --dtype auto
+      --task embedding
+      --dtype bfloat16
       --gpu-memory-utilization 0.08
       --trust-remote-code
       --max-model-len 32768
