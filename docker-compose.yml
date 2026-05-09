@@ -86,7 +86,7 @@ services:
       --trust-remote-code
       --max-num-seqs 32
       --moe-backend marlin
-      --kv-cache-dtype fp8_e5m2
+      --kv-cache-dtype fp8
       --speculative-config '{
         "model": "RedHatAI/gemma-4-26B-A4B-it-speculator.eagle3",
         "num_speculative_tokens": 3,
@@ -116,7 +116,7 @@ services:
       --attention-backend flashinfer
       --dtype auto
       --enable-prefix-caching
-      --kv-cache-dtype fp8_e5m2
+      --kv-cache-dtype fp8
       --enable-chunked-prefill
       --max-num-batched-tokens 2048
       --trust-remote-code
