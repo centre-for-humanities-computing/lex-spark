@@ -65,7 +65,7 @@ services:
       # NVFP4 scale keys. Download it from the model repo and place it alongside
       # your docker-compose.yml. Without this patch, MoE scale keys are silently
       # mis-mapped and outputs will be incorrect.
-      - ./gemma4_patched.py:/usr/local/lib/python3.12/dist-packages/gemma4_patched.py
+      - ./gemma4_patched.py:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/gemma4.py
 
     ports:
       - "8001:8000"
@@ -106,16 +106,14 @@ services:
       --host 0.0.0.0
       --port 8000
       --tensor-parallel-size 1
-      --max-model-len 32768
+      --max-model-len 16384
       --gpu-memory-utilization 0.10
-      --attention-backend flashinfer
-      --dtype auto
+      --dtype bfloat16
+      --kv-cache-dtype auto
       --enable-prefix-caching
-      --kv-cache-dtype fp8
-      --enable-chunked-prefill
-      --max-num-batched-tokens 2048
+      --max-num-batched-tokens 8192
       --trust-remote-code
-      --max-num-seqs 128
+      --max-num-seqs 64
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
