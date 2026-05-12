@@ -4,10 +4,12 @@ Configuration for using the Spark DGX as an inference server for Lex
 ## Running the stack
 ### 1. Verify NVIDIA Container Toolkit is set up
 nvidia-smi
+
 docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi
 
 ### 2. (Optional) Pull images and models ahead of time
 uv run download_models.py
+
 docker compose pull
 
 ### 3. Launch everything
