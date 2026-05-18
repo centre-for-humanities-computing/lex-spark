@@ -12,7 +12,7 @@ scrape_configs:
     metrics_path: /metrics/gemma-large
     scrape_interval: 5s   # faster for the model we actively route on
     static_configs:
-      - targets: ['nginx-proxy:9100']
+      - targets: ['nginx:9100']
         labels:
           model: gemma-4-26B-A4B-it
           tier: large
@@ -20,7 +20,7 @@ scrape_configs:
   - job_name: vllm-gemma-e2b
     metrics_path: /metrics/gemma-e2b
     static_configs:
-      - targets: ['nginx-proxy:9100']
+      - targets: ['nginx:9100']
         labels:
           model: gemma-4-E2B-it
           tier: small
@@ -28,7 +28,7 @@ scrape_configs:
   - job_name: vllm-embed-e5
     metrics_path: /metrics/embed-e5
     static_configs:
-      - targets: ['nginx-proxy:9100']
+      - targets: ['nginx:9100']
         labels:
           model: multilingual-e5-large
           tier: embedding
@@ -36,7 +36,7 @@ scrape_configs:
   - job_name: vllm-embed-jina
     metrics_path: /metrics/embed-jina
     static_configs:
-      - targets: ['nginx-proxy:9100']
+      - targets: ['nginx:9100']
         labels:
           model: jina-v5-small
           tier: embedding
