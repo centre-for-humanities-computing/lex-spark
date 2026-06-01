@@ -56,10 +56,27 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
 
-  # ── Orchestrator (if/when you instrument it) ────────────────────
-  - job_name: orchestrator
+  # ── Orchestrators: one job per environment ──────────────────────
+  - job_name: orchestrator-staging
     scrape_interval: 5s
     static_configs:
-      - targets: ['orchestrator-host:8000']  # adjust to your orchestrator
+      - targets: ['10.83.23.82:9091']
         labels:
           service: orchestrator
+          env: staging
+
+  - job_name: orchestrator-preprod
+    scrape_interval: 5s
+    static_configs:
+      - targets: ['10.83.23.82:9092']  # different port, same host
+        labels:
+          service: orchestrator
+          env: preprod
+
+  - job_name: orchestrator-production
+    scrape_interval: 5s
+    static_configs:
+      - targets: ['10.83.23.102:9091']
+        labels:
+          service: orchestrator
+          env: production
