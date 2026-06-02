@@ -1,2 +1,4 @@
 .env
 inference/models/*
+observability/.env
+inference/.env
