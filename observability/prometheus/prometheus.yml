@@ -6,10 +6,10 @@ global:
 
 scrape_configs:
   # ── vLLM backends via nginx metrics listener ────────────────────
-  # We scrape through nginx on port 9100 (your internal listener).
-  # Alternatively, scrape each vllm container directly by name.
+  # Scraped through nginx on port 9100 (internal Docker network).
+  # Metrics are also available on port 80 for external consumers.
   - job_name: vllm-gemma-large
-    metrics_path: /metrics/gemma-large
+    metrics_path: /metrics/gemma-4-26B-A4B-it
     scrape_interval: 5s   # faster for the model we actively route on
     static_configs:
       - targets: ['nginx:9100']
@@ -18,7 +18,7 @@ scrape_configs:
           tier: large
 
   - job_name: vllm-gemma-e2b
-    metrics_path: /metrics/gemma-e2b
+    metrics_path: /metrics/gemma-4-E2B-it
     static_configs:
       - targets: ['nginx:9100']
         labels:
@@ -26,7 +26,7 @@ scrape_configs:
           tier: small
 
   - job_name: vllm-embed-e5
-    metrics_path: /metrics/embed-e5
+    metrics_path: /metrics/multilingual-e5-large
     static_configs:
       - targets: ['nginx:9100']
         labels:
@@ -34,7 +34,7 @@ scrape_configs:
           tier: embedding
 
   - job_name: vllm-embed-jina
-    metrics_path: /metrics/embed-jina
+    metrics_path: /metrics/jina-v5-small
     static_configs:
       - targets: ['nginx:9100']
         labels:

@@ -34,18 +34,18 @@ flowchart LR
     end
 
     A -->|HTTP| N
-    N -->|routes by model name| Models
+    N -->|path-prefix routing| Models
     P -->|scrapes| NE
     P -->|scrapes| DC
     P -->|scrapes metrics| N
     GF -->|queries| P
 ```
 
-- **Port 80** — OpenAI-compatible API and vLLM metrics. NGINX reads the
-  `"model"` field from every request body and forwards it to the right vLLM
-  backend. Metrics are available at `/metrics/*` paths on the same port — no
-  need to open additional ports. LiteLLM just needs to point at
-  `http://DGX_SPARK_IP:80/v1`.
+- **Port 80** — OpenAI-compatible API and vLLM metrics. The URL path prefix is
+  the model name (e.g. `/gemma-4-26B-A4B-it/v1/chat/completions`). Metrics are
+  available at `/metrics/*` paths on the same port — no need to open additional
+  ports. LiteLLM just needs to point at `http://<dgx-ip>:80` and use path-prefix
+  routing.
 - **Port 3000** — Grafana (localhost only; tunnel/port-forward for remote access).
 
 ---
@@ -137,10 +137,10 @@ curl http://localhost:80/health
 # List available models
 curl http://localhost:80/v1/models | jq
 
-# Send a test chat request
-curl http://localhost:80/v1/chat/completions \
+# Send a test chat request (path-prefix routing)
+curl http://localhost:80/gemma-4-26B-A4B-it/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"gemma-4-26B-A4B-it","messages":[{"role":"user","content":"Hi!"}]}'
+  -d '{"messages":[{"role":"user","content":"Hi!"}]}'
 
 # Check Prometheus targets are up
 curl -s http://localhost:9090/api/v1/targets | jq '.data.activeTargets[].labels'
@@ -173,25 +173,23 @@ curl -s http://localhost:9090/api/v1/targets | jq '.data.activeTargets[].labels'
 
 ## How model routing works
 
-NGINX reads the JSON body of every request, extracts the `"model"` field with a
-regex, and forwards the request to the matching vLLM upstream:
+The first path segment is the model name. NGINX rewrites the URL (stripping the
+prefix) and forwards to the correct vLLM backend:
 
 ```
-POST /v1/chat/completions
-Body: {"model": "gemma-4-26B-A4B-it", ...}
-       → routed to vllm-gemma-large:8000
+POST  /gemma-4-26B-A4B-it/v1/chat/completions
+     → rewrites to /v1/chat/completions → vllm-gemma-large:8000
 
-POST /v1/embeddings
-Body: {"model": "multilingual-e5-large", ...}
-       → routed to vllm-embed-e5:8000
+POST /multilingual-e5-large/v1/embeddings
+     → rewrites to /v1/embeddings → vllm-embed-e5:8000
 ```
 
 ### Adding a new model
 
 1. Add the vLLM service to `inference/docker-compose.yml`
-2. Add its upstream block and model name to the `$target` map in `nginx/nginx.conf`
-3. Add it to the static `/v1/models` response in `nginx/nginx.conf`
-4. Add a metrics location block (port 9100 server) in `nginx/nginx.conf`
+2. Add a `location /<model-name>/` block to the port 80 server in `nginx/nginx.conf`
+3. Add the model to the static `/v1/models` response in `nginx/nginx.conf`
+4. Add a `location = /metrics/<model-name>` block in both the port 80 and 9100 servers
 5. Add a scrape config in `observability/prometheus/prometheus.yml`
 
 ---
@@ -221,9 +219,10 @@ Login with username `admin` and the password from `observability/.env`.
 ### Prometheus endpoints (for reference)
 
 vLLM metrics are available on **both** ports:
-- **Port 80** (`/metrics/gemma-large`, `/metrics/embed-e5`, etc.) — for
-  external consumers like a VPS-side Prometheus. Only port 80 needs to be open
-  in the firewall.
+- **Port 80** — for external consumers like a VPS-side Prometheus.
+  `/metrics/gemma-4-26B-A4B-it`, `/metrics/gemma-4-E2B-it`,
+  `/metrics/multilingual-e5-large`, `/metrics/jina-v5-small`. Only port 80
+  needs to be open in the firewall.
 - **Port 9100** (same paths) — internal Docker network only. The local
   Prometheus scrapes `nginx:9100` from inside the `dgx-inference` network.
 
@@ -303,26 +302,38 @@ Common causes:
 - `HF_TOKEN` not set or invalid (check `inference/.env`)
 - GPU out of memory (check `nvidia-smi` — the large model needs ~half a GPU)
 
-### "Unknown or missing model" from NGINX
+### "404" or "Unknown route" from NGINX
 
-The model name in your request doesn't match the served model names. The valid
-names are:
+Requests must use path-prefix routing. The valid URL patterns are:
 
-- `gemma-4-26B-A4B-it`
-- `gemma-4-E2B-it`
-- `multilingual-e5-large`
-- `jina-v5-small`
+| Model | API base path |
+|---|---|
+| `gemma-4-26B-A4B-it` | `/gemma-4-26B-A4B-it/v1/...` |
+| `gemma-4-E2B-it` | `/gemma-4-E2B-it/v1/...` |
+| `multilingual-e5-large` | `/multilingual-e5-large/v1/...` |
+| `jina-v5-small` | `/jina-v5-small/v1/...` |
+
+If you hit `/v1/...` directly (without a model prefix), NGINX returns a 404.
 
 ### Grafana dashboards show "No data"
 
-Check that Prometheus targets are up:
+First, check that Prometheus targets are up:
 
 ```bash
 curl -s http://localhost:9090/api/v1/targets | jq '.data.activeTargets[] | {job: .labels.job, health: .health}'
 ```
 
-If vLLM targets are down but models are running, the nginx metrics listener
-(port 9100) may have failed — check `docker compose logs nginx`.
+All vLLM jobs should show `"health": "up"`. If they're down but models are
+running, the Prometheus metrics paths may be out of sync with nginx — verify
+`observability/prometheus/prometheus.yml` paths match the `location` blocks in
+`inference/nginx/nginx.conf`.
+
+If targets are healthy but dashboards still show nothing, the pre-loaded
+dashboard JSONs may have a mismatched datasource UID. A matching `uid` is now
+set in `observability/grafana/provisioning/datasources/prometheus.yml`. If you
+imported dashboards manually into a running Grafana (not through provisioning),
+you'll need to select "Prometheus" manually in each dashboard's datasource
+dropdown.
 
 ### Prometheus can't reach orchestrator targets
 
@@ -340,17 +351,9 @@ harmless and doesn't affect DGX monitoring.
   mount path is tied to Python 3.12 site-packages). Track the upstream fix at
   the vLLM GitHub repository.
 
-- **NGINX buffers the full request body for model routing**: this means requests
-  with very large message histories (>1 MB) will fail. If you hit this, increase
-  `client_body_buffer_size` in `nginx/nginx.conf` (currently 1 MB).
-
 - **No alerting configured**: Prometheus has no Alertmanager — nobody gets paged
   if a model goes down. This was intentionally left out; add Alertmanager
   configs in `observability/prometheus/` if needed.
-
-- **Grafana dashboard datasources may need remapping**: On first launch, you
-  may need to select "Prometheus" as the datasource in each dashboard's
-  settings if they show "Datasource not found."
 
 - **Two Docker Compose stacks**: They're intentionally separate so monitoring
   can be restarted independently. The observability stack references the
