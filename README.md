@@ -186,9 +186,6 @@ Body: {"model": "multilingual-e5-large", ...}
        → routed to vllm-embed-e5:8000
 ```
 
-If the `"model"` field is missing or doesn't match a known model, NGINX returns
-a `400` with a list of supported models.
-
 ### Adding a new model
 
 1. Add the vLLM service to `inference/docker-compose.yml`
