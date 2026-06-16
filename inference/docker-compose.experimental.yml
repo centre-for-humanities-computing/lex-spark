@@ -119,11 +119,8 @@ services:
   # Replaces vllm-gemma-extra-small from the default stack.
   # MTP uses gg-hf-am/gemma-4-E2B-it-assistant for speculative decoding.
   vllm-gemma-extra-small:
-    <<: *vllm-gemma4
+    <<: *vllm-diffusion
     container_name: vllm-gemma-extra-small
-    # The gemma4-cu130 image ships with an older transformers that doesn't
-    # recognize the 'gemma4_assistant' model type used by the MTP assistant
-    # checkpoint. Upgrade it at container startup.
     entrypoint: ["/bin/bash", "-c"]
     environment:
       - HF_TOKEN=${HF_TOKEN}
@@ -134,8 +131,7 @@ services:
     ports:
       - "8004:8000"
     command: >
-      pip install -q --upgrade transformers &&
-      exec vllm serve ${GEMMA_E2B_QUANT_MODEL}
+      ${GEMMA_E2B_QUANT_MODEL}
       --served-model-name gemma-4-E2B-it
       --host 0.0.0.0
       --port 8000
