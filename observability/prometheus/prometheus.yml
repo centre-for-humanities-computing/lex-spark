@@ -1,0 +1,82 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    host: dgx-spark
+
+scrape_configs:
+  # ── vLLM backends via nginx metrics listener ────────────────────
+  # Scraped through nginx on port 9100 (internal Docker network).
+  # Metrics are also available on port 80 for external consumers.
+  - job_name: vllm-gemma-large
+    metrics_path: /metrics/gemma-4-26B-A4B-it
+    scrape_interval: 5s   # faster for the model we actively route on
+    static_configs:
+      - targets: ['nginx:9100']
+        labels:
+          model: gemma-4-26B-A4B-it
+          tier: large
+
+  - job_name: vllm-gemma-e2b
+    metrics_path: /metrics/gemma-4-E2B-it
+    static_configs:
+      - targets: ['nginx:9100']
+        labels:
+          model: gemma-4-E2B-it
+          tier: small
+
+  - job_name: vllm-embed-e5
+    metrics_path: /metrics/multilingual-e5-large
+    static_configs:
+      - targets: ['nginx:9100']
+        labels:
+          model: multilingual-e5-large
+          tier: embedding
+
+  - job_name: vllm-embed-jina
+    metrics_path: /metrics/jina-v5-small
+    static_configs:
+      - targets: ['nginx:9100']
+        labels:
+          model: jina-v5-small
+          tier: embedding
+
+  # ── Host metrics ────────────────────────────────────────────────
+  - job_name: node
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+  # ── GPU metrics ─────────────────────────────────────────────────
+  - job_name: dcgm
+    static_configs:
+      - targets: ['dcgm-exporter:9400']
+
+  # ── Prometheus self-monitoring ──────────────────────────────────
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # ── Orchestrators: one job per environment ──────────────────────
+  - job_name: orchestrator-staging
+    scrape_interval: 5s
+    static_configs:
+      - targets: ['10.83.23.82:9091']
+        labels:
+          service: orchestrator
+          env: staging
+
+  - job_name: orchestrator-preprod
+    scrape_interval: 5s
+    static_configs:
+      - targets: ['10.83.23.82:9092']  # different port, same host
+        labels:
+          service: orchestrator
+          env: preprod
+
+  - job_name: orchestrator-production
+    scrape_interval: 5s
+    static_configs:
+      - targets: ['10.83.23.102:9091']
+        labels:
+          service: orchestrator
+          env: production

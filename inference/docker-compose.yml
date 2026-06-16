@@ -77,7 +77,6 @@ services:
       --tensor-parallel-size 1
       --max-model-len 131072
       --gpu-memory-utilization 0.50
-      --attention-backend flashinfer
       --quantization modelopt
       --dtype auto
       --enable-prefix-caching
@@ -107,7 +106,7 @@ services:
       --port 8000
       --tensor-parallel-size 1
       --max-model-len 16384
-      --gpu-memory-utilization 0.10
+      --gpu-memory-utilization 0.15
       --dtype bfloat16
       --kv-cache-dtype auto
       --enable-prefix-caching
@@ -174,6 +173,7 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
+      - "10.57.5.14:9100:9100"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
