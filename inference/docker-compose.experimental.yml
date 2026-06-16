@@ -28,7 +28,7 @@ x-gpu-resources: &gpu-resources
 
 # ── Gemma 4 vLLM base (for quantized E2B + MTP) ──────────────────────────────
 x-vllm-gemma4: &vllm-gemma4
-  image: vllm/vllm-openai:gemma4-cu130
+  image: vllm/vllm-openai:gemma4-0505-cu130
   restart: unless-stopped
   environment:
     - HF_TOKEN=${HF_TOKEN}
@@ -119,9 +119,8 @@ services:
   # Replaces vllm-gemma-extra-small from the default stack.
   # MTP uses gg-hf-am/gemma-4-E2B-it-assistant for speculative decoding.
   vllm-gemma-extra-small:
-    <<: *vllm-diffusion
+    <<: *vllm-gemma4
     container_name: vllm-gemma-extra-small
-    entrypoint: ["/bin/bash", "-c"]
     environment:
       - HF_TOKEN=${HF_TOKEN}
       - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
