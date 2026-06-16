@@ -171,7 +171,99 @@ curl -s http://localhost:9090/api/v1/targets | jq '.data.activeTargets[].labels'
 
 ---
 
-## How model routing works
+## Experimental inference stack (`inference/docker-compose.experimental.yml`)
+
+An **optional, drop-in replacement** for the default stack that experiments with
+higher inference efficiency. Uses the same served-model-names — LiteLLM and
+Prometheus/Grafana monitoring work against either stack without changes.
+
+> ⚠️ **Only one inference stack can run at a time on the Spark.**
+> Stop the default stack first: `docker compose -f inference/docker-compose.yml down`
+
+### What's different
+
+| Service | Default stack | Experimental stack |
+|---|---|---|
+| `vllm-gemma-large` | Gemma 4 26B A4B (NVFP4 MoE) | **DiffusionGemma 26B-A4B** (NVFP4 block-diffusion) |
+| `vllm-gemma-extra-small` | Gemma 4 E2B (dense, bfloat16) | **Gemma 4 E2B NVFP4** (quantized) + **MTP speculative decoding** |
+| `vllm-embed-e5` | multilingual-e5-large | Unchanged |
+| `vllm-embed-jina` | jina-v5-small | Unchanged |
+| Docker image (large) | `vllm/vllm-openai:gemma4-cu130` | `vllm/vllm-openai:gemma` |
+| Docker image (e2b) | `vllm/vllm-openai:gemma4-cu130` | `vllm/vllm-openai:gemma4-cu130` |
+
+**DiffusionGemma** generates 256-token blocks via iterative denoising instead of
+autoregressive token-by-token. Higher time-to-first-token, significantly higher
+per-request throughput. Requires `--max-num-seqs 4` to keep noise buffers within
+VRAM budget.
+
+**MTP (Multi-Token Prediction)** uses the `gg-hf-am/gemma-4-E2B-it-assistant`
+checkpoint for speculative decoding with the quantized E2B model. No separate
+draft model needed — the assistant layers share KV cache with the target.
+
+### Prerequisites (additional)
+
+The experimental stack needs three extra model repos. The updated
+`download_models.py` already includes them:
+
+- `bg-digitalservices/Gemma-4-E2B-it-NVFP4A16`
+- `nvidia/diffusiongemma-26B-A4B-it-NVFP4`
+- `gg-hf-am/gemma-4-E2B-it-assistant`
+
+Re-run the download script to pull them:
+
+```bash
+cd inference
+uv run download_models.py
+```
+
+### Launch
+
+```bash
+# 1. Stop the default stack
+docker compose -f inference/docker-compose.yml down
+
+# 2. Pull the DiffusionGemma docker image (different from default)
+docker compose -f inference/docker-compose.experimental.yml pull
+
+# 3. Launch
+docker compose -f inference/docker-compose.experimental.yml up -d
+
+# 4. Wait for all services to be healthy
+docker compose -f inference/docker-compose.experimental.yml ps
+# Look for "(healthy)" — DiffusionGemma may take 3-5 min on first start
+```
+
+### Verification
+
+```bash
+# Check NGINX health
+curl http://localhost:80/health
+
+# List models (identical to default stack)
+curl http://localhost:80/v1/models | jq
+
+# Test chat with DiffusionGemma (block-diffusion; higher TTFT, high throughput)
+curl http://localhost:80/gemma-4-26B-A4B-it/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"Explain quantum computing in one paragraph."}]}'
+
+# Test chat with E2B (MTP-accelerated; expect ~1.3-1.5× throughput vs default)
+curl http://localhost:80/gemma-4-E2B-it/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"Hi!"}]}'
+
+# Prometheus targets unchanged
+curl -s http://localhost:9090/api/v1/targets | jq '.data.activeTargets[].labels | {job,model}'
+```
+
+### Switching back to default
+
+```bash
+docker compose -f inference/docker-compose.experimental.yml down
+docker compose -f inference/docker-compose.yml up -d
+```
+
+---
 
 The first path segment is the model name. NGINX rewrites the URL (stripping the
 prefix) and forwards to the correct vLLM backend:
