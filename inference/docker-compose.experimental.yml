@@ -117,6 +117,8 @@ services:
   # Uses nightly-aarch64 (required for DGX Spark ARM arch + NVFP4 + MTP).
   # MTP drafter: google/gemma-4-26B-A4B-it-assistant (standard bf16).
   # NVFP4 quantization is auto-detected from config.json — no explicit flags.
+  # --hf-overrides tie_word_embeddings:false is required because the
+  # NVFP4-quantized lm_head does not support weight tying.
   vllm-gemma-large:
     image: vllm/vllm-openai:nightly-aarch64
     restart: unless-stopped
@@ -147,6 +149,7 @@ services:
       --max-num-batched-tokens 8192
       --trust-remote-code
       --max-num-seqs 2
+      --hf-overrides '{"tie_word_embeddings":false}'
       --speculative-config '{"model":"${GEMMA_26B_ASSISTANT_MODEL}","num_speculative_tokens":2}'
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
