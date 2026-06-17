@@ -3,12 +3,12 @@
 #
 # Changes from the default stack:
 #   1. E2B → QAT w4a16 compressed-tensors E2B with MTP speculative decoding
-#   2. 26B → QAT w4a16 compressed-tensors 26B MoE with MTP speculative decoding
+#   2. 26B → NVIDIA NVFP4-quantized 26B MoE with MTP (google/gemma-4-26B-A4B-it-assistant)
 #   3. Embeddings (e5, jina) — unchanged
 #   4. Served-model-names identical — LiteLLM and monitoring need no changes
 #
 # ⚠️ GPU MEMORY: This stack's defaults sum to >100% on a single GPU.
-#    26B 0.55 + E2B 0.20 + e5 0.08 + jina 0.12 = 0.95.
+#    26B 0.50 + E2B 0.20 + e5 0.08 + jina 0.12 = 0.90.
 #    Tune --gpu-memory-utilization values for your Spark before deploying.
 #
 # Launch: docker compose -f docker-compose.experimental.yml up -d
@@ -112,33 +112,41 @@ services:
   #     retries: 10
   #     start_period: 240s
 
-  # ── Gemma 4 26B A4B MoE (QAT w4a16 compressed-tensors + MTP speculative decoding) ──
+  # ── Gemma 4 26B A4B MoE (NVFP4-quantized + MTP speculative decoding) ──
   # Replaces vllm-gemma-large from the default stack.
-  # QAT-trained w4a16 weights with matching QAT assistant for MTP.
+  # Uses nightly-aarch64 (required for DGX Spark ARM arch + NVFP4 + MTP).
+  # MTP drafter: google/gemma-4-26B-A4B-it-assistant (standard bf16).
+  # NVFP4 quantization is auto-detected from config.json — no explicit flags.
   vllm-gemma-large:
-    <<: *vllm-gemma4
+    image: vllm/vllm-openai:nightly-aarch64
+    restart: unless-stopped
     container_name: vllm-gemma-large
-    ports:
-      - "8001:8000"
     environment:
       - HF_TOKEN=${HF_TOKEN}
       - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
       - HF_HOME=/model-cache
-      - VLLM_NVFP4_GEMM_BACKEND=marlin
+    volumes:
+      - ${MODEL_CACHE_PATH}:/model-cache
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    <<: *gpu-resources
+    ports:
+      - "8001:8000"
     command: >
       ${GEMMA_26B_NVFP4_MODEL}
       --served-model-name gemma-4-26B-A4B-it
       --host 0.0.0.0
       --port 8000
       --tensor-parallel-size 1
-      --max-model-len 131072
+      --max-model-len 32768
       --gpu-memory-utilization 0.50
       --dtype auto
-      --moe-backend marlin
       --enable-prefix-caching
       --max-num-batched-tokens 8192
       --trust-remote-code
-      --max-num-seqs 4
+      --max-num-seqs 2
       --speculative-config '{"model":"${GEMMA_26B_ASSISTANT_MODEL}","num_speculative_tokens":2}'
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]

@@ -18,10 +18,10 @@ if __name__ == "__main__":
         "google/gemma-4-E2B-it-qat-w4a16-ct",
         # QAT E2B MTP assistant (unquantized, gemma4_assistant arch)
         "google/gemma-4-E2B-it-qat-q4_0-unquantized-assistant",
-        # QAT 26B A4B MoE (w4a16 compressed-tensors, vLLM-native)
-        "google/gemma-4-26B-A4B-it-qat-w4a16-ct",
-        # QAT 26B A4B MoE MTP assistant (unquantized, gemma4_assistant arch)
-        "google/gemma-4-26B-A4B-it-qat-q4_0-unquantized-assistant",
+        # NVFP4 26B A4B MoE (NVIDIA-quantized)
+        "nvidia/Gemma-4-26B-A4B-NVFP4",
+        # 26B A4B MoE MTP assistant (standard bf16, gemma4_assistant arch)
+        "google/gemma-4-26B-A4B-it-assistant",
 
         # ── DiffusionGemma (commented out — kept for future experimentation)
         # "nvidia/diffusiongemma-26B-A4B-it-NVFP4",
