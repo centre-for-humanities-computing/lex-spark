@@ -100,7 +100,7 @@ services:
       --tensor-parallel-size 1
       --max-model-len 131072
       --max-num-seqs 4
-      --gpu-memory-utilization 0.60
+      --gpu-memory-utilization 0.55
       --generation-config vllm
       --quantization modelopt
       --dtype auto
@@ -188,7 +188,7 @@ services:
       --port 8000
       --task embedding
       --dtype bfloat16
-      --gpu-memory-utilization 0.08
+      --gpu-memory-utilization 0.12
       --trust-remote-code
       --max-model-len 32768
     healthcheck:

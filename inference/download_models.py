@@ -3,8 +3,8 @@ import os
 
 if __name__ == "__main__":
     token = os.environ["HF_TOKEN"]
-    cache = "./models"
-
+    os.environ.setdefault("HF_HOME", os.path.abspath("./models"))
+    
     models = [
         # Gemma 4 models (served via vllm/vllm-openai:gemma4-cu130)
         "bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4A16",
@@ -24,5 +24,5 @@ if __name__ == "__main__":
 
     for model in models:
         print(f"Downloading {model}...")
-        snapshot_download(repo_id=model, token=token, cache_dir=cache)
+        snapshot_download(repo_id=model, token=token)
         print(f"  ✓ Done")
