@@ -4,7 +4,7 @@ import os
 if __name__ == "__main__":
     token = os.environ["HF_TOKEN"]
     os.environ.setdefault("HF_HOME", os.path.abspath("./models"))
-    
+
     models = [
         # Gemma 4 models (served via vllm/vllm-openai:gemma4-cu130)
         "bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4A16",
@@ -15,7 +15,7 @@ if __name__ == "__main__":
 
         # ── Experimental models (for docker-compose.experimental.yml) ──────
         # Quantized Gemma 4 E2B (replaces google/gemma-4-E2B-it)
-        "bg-digitalservices/Gemma-4-E2B-it-NVFP4A16",
+        "bg-digitalservices/Gemma-4-E2B-it-NVFP4",
         # DiffusionGemma 26B (replaces bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4A16)
         "nvidia/diffusiongemma-26B-A4B-it-NVFP4",
         # Gemma 4 E2B MTP assistant checkpoint (speculative decoding)
