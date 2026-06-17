@@ -120,8 +120,13 @@ services:
     container_name: vllm-gemma-large
     ports:
       - "8001:8000"
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+      - HF_HOME=/model-cache
+      - VLLM_NVFP4_GEMM_BACKEND=marlin
     command: >
-      ${GEMMA_26B_QAT_MODEL}
+      ${GEMMA_26B_NVFP4_MODEL}
       --served-model-name gemma-4-26B-A4B-it
       --host 0.0.0.0
       --port 8000
@@ -133,8 +138,8 @@ services:
       --enable-prefix-caching
       --max-num-batched-tokens 8192
       --trust-remote-code
-      --max-num-seqs 32
-      --speculative-config '{"method":"mtp","model":"${GEMMA_26B_QAT_ASSISTANT_MODEL}","num_speculative_tokens":1}'
+      --max-num-seqs 4
+      --speculative-config '{"model":"${GEMMA_26B_ASSISTANT_MODEL}","num_speculative_tokens":2}'
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
