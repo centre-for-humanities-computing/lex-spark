@@ -137,14 +137,12 @@ services:
       --tensor-parallel-size 1
       --max-model-len 32768
       --gpu-memory-utilization 0.10
-      --quantization modelopt
       --dtype auto
       --kv-cache-dtype fp8
       --enable-prefix-caching
       --max-num-batched-tokens 8192
       --trust-remote-code
       --max-num-seqs 64
-      --speculative-config '{"method":"mtp","model":"gg-hf-am/gemma-4-E2B-it-assistant","num_speculative_tokens":1}'
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
