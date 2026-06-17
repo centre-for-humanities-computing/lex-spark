@@ -2,15 +2,14 @@
 # ── Experimental inference stack (drop-in replacement for docker-compose.yml) ──
 #
 # Changes from the default stack:
-#   1. E2B → NVFP4-quantized Gemma 4 E2B with MTP speculative decoding
-#   2. 26B → DiffusionGemma 26B-A4B (block-diffusion, NVFP4-quantized)
+#   1. E2B → QAT w4a16 compressed-tensors E2B with MTP speculative decoding
+#   2. 26B → QAT w4a16 compressed-tensors 26B MoE with MTP speculative decoding
 #   3. Embeddings (e5, jina) — unchanged
 #   4. Served-model-names identical — LiteLLM and monitoring need no changes
 #
 # ⚠️ GPU MEMORY: This stack's defaults sum to >100% on a single GPU.
-#    DiffusionGemma 0.85 + E2B 0.10 + e5 0.08 + jina 0.08 = 1.11.
+#    26B 0.55 + E2B 0.20 + e5 0.08 + jina 0.12 = 0.95.
 #    Tune --gpu-memory-utilization values for your Spark before deploying.
-#    Suggestion: lower DiffusionGemma to ~0.70 (0.70+0.10+0.08+0.08=0.96).
 #
 # Launch: docker compose -f docker-compose.experimental.yml up -d
 # (Stop the default stack first: docker compose -f docker-compose.yml down)
@@ -77,37 +76,65 @@ x-vllm-standard: &vllm-standard
 
 services:
 
-  # ── DiffusionGemma 26B-A4B (block-diffusion, NVFP4) ──────────────────────
+  # ── DiffusionGemma 26B-A4B (block-diffusion, NVFP4) [COMMENTED OUT] ────
+  # Kept for future experimentation. Block-diffusion generates 256-token
+  # blocks via iterative denoising. Higher TTFT, higher generation throughput.
+  # vllm-gemma-large:
+  #   <<: *vllm-diffusion
+  #   container_name: vllm-gemma-large
+  #   environment:
+  #     - HF_TOKEN=${HF_TOKEN}
+  #     - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+  #     - HF_HOME=/model-cache
+  #     - VLLM_NVFP4_GEMM_BACKEND=marlin
+  #   ports:
+  #     - "8001:8000"
+  #   command: >
+  #     ${GEMMA_DIFFUSION_MODEL}
+  #     --served-model-name gemma-4-26B-A4B-it
+  #     --host 0.0.0.0
+  #     --port 8000
+  #     --tensor-parallel-size 1
+  #     --max-model-len 131072
+  #     --max-num-seqs 4
+  #     --gpu-memory-utilization 0.50
+  #     --generation-config vllm
+  #     --quantization modelopt
+  #     --dtype auto
+  #     --moe-backend marlin
+  #     --trust-remote-code
+  #     --hf-overrides '{"diffusion_sampler":"entropy_bound","diffusion_entropy_bound":0.1}'
+  #     --diffusion-config '{"canvas_length":256}'
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 10
+  #     start_period: 240s
+
+  # ── Gemma 4 26B A4B MoE (QAT w4a16 compressed-tensors + MTP speculative decoding) ──
   # Replaces vllm-gemma-large from the default stack.
-  # Block-diffusion generates 256-token blocks via iterative denoising.
-  # Higher time-to-first-token, significantly higher generation throughput.
+  # QAT-trained w4a16 weights with matching QAT assistant for MTP.
   vllm-gemma-large:
-    <<: *vllm-diffusion
+    <<: *vllm-gemma4
     container_name: vllm-gemma-large
-    environment:
-      - HF_TOKEN=${HF_TOKEN}
-      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
-      - HF_HOME=/model-cache
-      # NVFP4 quantization uses Marlin kernel for non-MoE layers on SM 12.1.
-      - VLLM_NVFP4_GEMM_BACKEND=marlin
     ports:
       - "8001:8000"
     command: >
-      ${GEMMA_DIFFUSION_MODEL}
+      ${GEMMA_26B_QAT_MODEL}
       --served-model-name gemma-4-26B-A4B-it
       --host 0.0.0.0
       --port 8000
       --tensor-parallel-size 1
       --max-model-len 131072
-      --max-num-seqs 4
-      --gpu-memory-utilization 0.55
-      --generation-config vllm
-      --quantization modelopt
+      --gpu-memory-utilization 0.50
       --dtype auto
       --moe-backend marlin
+      --enable-prefix-caching
+      --max-num-batched-tokens 8192
       --trust-remote-code
-      --hf-overrides '{"diffusion_sampler":"entropy_bound","diffusion_entropy_bound":0.1}'
-      --diffusion-config '{"canvas_length":256}'
+      --max-num-seqs 32
+      --speculative-config '{"method":"mtp","model":"${GEMMA_26B_QAT_ASSISTANT_MODEL}","num_speculative_tokens":1}'
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -115,18 +142,12 @@ services:
       retries: 10
       start_period: 240s
 
-  # ── Gemma 4 E2B (NVFP4-quantized + MTP speculative decoding) ────────────
+  # ── Gemma 4 E2B (QAT w4a16 compressed-tensors + MTP speculative decoding)
   # Replaces vllm-gemma-extra-small from the default stack.
-  # MTP uses gg-hf-am/gemma-4-E2B-it-assistant for speculative decoding.
+  # MTP uses the matching QAT unquantized assistant for speculative decoding.
   vllm-gemma-extra-small:
     <<: *vllm-gemma4
     container_name: vllm-gemma-extra-small
-    environment:
-      - HF_TOKEN=${HF_TOKEN}
-      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
-      - HF_HOME=/model-cache
-      # NVFP4 quantization requires Marlin kernel on SM 12.1.
-      - VLLM_NVFP4_GEMM_BACKEND=marlin
     ports:
       - "8004:8000"
     command: >
@@ -136,13 +157,14 @@ services:
       --port 8000
       --tensor-parallel-size 1
       --max-model-len 32768
-      --gpu-memory-utilization 0.10
+      --gpu-memory-utilization 0.20
       --dtype auto
       --kv-cache-dtype fp8
       --enable-prefix-caching
       --max-num-batched-tokens 8192
       --trust-remote-code
       --max-num-seqs 64
+      --speculative-config '{"method":"mtp","model":"${GEMMA_E2B_ASSISTANT_MODEL}","num_speculative_tokens":1}'
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
