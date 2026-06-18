@@ -71,7 +71,7 @@ services:
       --enable-chunked-prefill
       --max-num-batched-tokens 8192
       --trust-remote-code
-      --max-num-seqs 32
+      --max-num-seqs 6
       --moe-backend marlin
       --kv-cache-dtype fp8
     healthcheck:
