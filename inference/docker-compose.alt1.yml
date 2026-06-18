@@ -1,0 +1,180 @@
+# Config 1 — Community NVFP4 (W4A4) for both Gemma models, NO speculative decoding.
+# Baseline to beat. 26B requires the gemma4_patched.py MoE scale-key fix.
+# Launch: docker compose -f docker-compose.bench1-community-nvfp4.yml up -d
+name: dgx-inference
+
+x-gpu-resources: &gpu-resources
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            capabilities: [gpu]
+
+x-vllm-gemma4: &vllm-gemma4
+  image: vllm/vllm-openai:gemma4-cu130
+  restart: unless-stopped
+  environment:
+    - HF_TOKEN=${HF_TOKEN}
+    - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+    - HF_HOME=/model-cache
+  volumes:
+    - ${MODEL_CACHE_PATH}:/model-cache
+  ipc: host
+  ulimits:
+    memlock: -1
+    stack: 67108864
+  <<: *gpu-resources
+
+x-vllm-standard: &vllm-standard
+  image: nvcr.io/nvidia/vllm:25.12-py3
+  restart: unless-stopped
+  environment:
+    - HF_TOKEN=${HF_TOKEN}
+    - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+    - HF_HOME=/model-cache
+  volumes:
+    - ${MODEL_CACHE_PATH}:/model-cache
+  ipc: host
+  ulimits:
+    memlock: -1
+    stack: 67108864
+  <<: *gpu-resources
+
+services:
+
+  # ── 26B A4B MoE — community NVFP4 (W4A4) ──────────────────────────
+  vllm-gemma-large:
+    <<: *vllm-gemma4
+    container_name: vllm-gemma-large
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+      - HF_HOME=/model-cache
+      - VLLM_NVFP4_GEMM_BACKEND=marlin
+    volumes:
+      - ${MODEL_CACHE_PATH}:/model-cache
+      - ./gemma4_patched.py:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/gemma4.py
+    ports:
+      - "8001:8000"
+    command: >
+      ${C1_GEMMA_26B}
+      --served-model-name gemma-4-26B-A4B-it
+      --host 0.0.0.0
+      --port 8000
+      --tensor-parallel-size 1
+      --max-model-len 131072
+      --gpu-memory-utilization 0.45
+      --quantization modelopt
+      --dtype auto
+      --enable-prefix-caching
+      --enable-chunked-prefill
+      --max-num-batched-tokens 8192
+      --trust-remote-code
+      --max-num-seqs 32
+      --moe-backend marlin
+      --kv-cache-dtype fp8
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 8
+      start_period: 180s
+
+  # ── E2B — community NVFP4 (W4A4), no patch needed ─────────────────
+  vllm-gemma-extra-small:
+    <<: *vllm-gemma4
+    container_name: vllm-gemma-extra-small
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+      - HF_HOME=/model-cache
+      - VLLM_NVFP4_GEMM_BACKEND=marlin
+    volumes:
+      - ${MODEL_CACHE_PATH}:/model-cache
+    ports:
+      - "8004:8000"
+    command: >
+      ${C1_GEMMA_E2B}
+      --served-model-name gemma-4-E2B-it
+      --host 0.0.0.0
+      --port 8000
+      --tensor-parallel-size 1
+      --max-model-len 131072
+      --gpu-memory-utilization 0.15
+      --quantization modelopt
+      --dtype auto
+      --kv-cache-dtype fp8
+      --enable-prefix-caching
+      --max-num-batched-tokens 8192
+      --trust-remote-code
+      --max-num-seqs 64
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 8
+      start_period: 120s
+
+  vllm-embed-e5:
+    <<: *vllm-standard
+    container_name: vllm-embed-e5
+    ports:
+      - "8003:8000"
+    command: >
+      vllm serve ${EMBED_MODEL_1}
+      --served-model-name multilingual-e5-large
+      --host 0.0.0.0
+      --port 8000
+      --task embedding
+      --dtype bfloat16
+      --gpu-memory-utilization 0.08
+      --trust-remote-code
+      --max-model-len 512
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  vllm-embed-jina:
+    <<: *vllm-standard
+    container_name: vllm-embed-jina
+    ports:
+      - "8005:8000"
+    command: >
+      vllm serve ${EMBED_MODEL_2}
+      --served-model-name jina-v5-small
+      --host 0.0.0.0
+      --port 8000
+      --task embedding
+      --dtype bfloat16
+      --gpu-memory-utilization 0.12
+      --trust-remote-code
+      --max-model-len 32768
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  nginx:
+    image: nginx:alpine
+    container_name: nginx-proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "10.57.5.14:9100:9100"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      vllm-gemma-large:
+        condition: service_healthy
+      vllm-gemma-extra-small:
+        condition: service_healthy
+      vllm-embed-e5:
+        condition: service_healthy
+      vllm-embed-jina:
+        condition: service_healthy
