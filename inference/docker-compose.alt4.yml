@@ -77,7 +77,9 @@ services:
       --tool-call-parser gemma4
       --reasoning-parser gemma4
       --override-generation-config '{"max_new_tokens": null}'
-      --default-chat-template-kwargs '{"enable_thinking":true}'
+      --diffusion-config '{"canvas_length": 128, "max_denoising_steps": 24}'
+      --hf-overrides '{"diffusion_sampler":"entropy_bound","diffusion_entropy_bound":0.1}'
+      --default-chat-template-kwargs '{"enable_thinking":false}'
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
