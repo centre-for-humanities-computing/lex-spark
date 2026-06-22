@@ -1,7 +1,12 @@
-# docker-compose.yml
+# Config 2 — MTP speculative decoding for both models.
+# 26B target = NVIDIA NVFP4 (works natively with MTP, NO gemma4_patched.py).
+# 26B assistant = google/gemma-4-26B-A4B-it-assistant (MUST be 26B-A4B; 31B fails dim-mismatch).
+# E2B = QAT compressed-tensors + matching QAT assistant.
+# Image = nightly-aarch64 (required for NVFP4 + MTP on Spark per note.com/gb10_tsurumitsu).
+# NOTE: MTP boosts decode (~55-61 vs ~32 tok/s) but HURTS long-prefill/short-output.
+# Launch: docker compose -f docker-compose.bench2-mtp.yml up -d
 name: dgx-inference
 
-# ── Shared GPU resource definition ───────────────────────────────────────────
 x-gpu-resources: &gpu-resources
   deploy:
     resources:
@@ -9,24 +14,6 @@ x-gpu-resources: &gpu-resources
         devices:
           - driver: nvidia
             capabilities: [gpu]
-
-# ── Gemma 4 vLLM base ─────────────────────────────────────────────────────────
-# The gemma4-cu130 custom image is required for the Gemma 4 model family.
-# It does NOT support general embedding models.
-x-vllm-gemma4: &vllm-gemma4
-  image: vllm/vllm-openai:gemma4-cu130
-  restart: unless-stopped
-  environment:
-    - HF_TOKEN=${HF_TOKEN}
-    - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
-    - HF_HOME=/model-cache
-  volumes:
-    - ${MODEL_CACHE_PATH}:/model-cache
-  ipc: host
-  ulimits:
-    memlock: -1
-    stack: 67108864
-  <<: *gpu-resources
 
 x-vllm-nightly: &vllm-nightly
   image: vllm/vllm-openai:nightly-aarch64
@@ -43,9 +30,6 @@ x-vllm-nightly: &vllm-nightly
     stack: 67108864
   <<: *gpu-resources
 
-# ── Standard NVIDIA vLLM base ─────────────────────────────────────────────────
-# 26.02-py3 requires driver >=590.48 — host has 580.142, use 25.12-py3 instead.
-# 25.12-py3 is based on CUDA 13.1.0 which is compatible with driver 580.x.
 x-vllm-standard: &vllm-standard
   image: nvcr.io/nvidia/vllm:25.12-py3
   restart: unless-stopped
@@ -63,50 +47,32 @@ x-vllm-standard: &vllm-standard
 
 services:
 
-  # ── Gemma 4 26B A4B (MoE) — large/capable model ──────────────────────────
+  # ── 26B A4B NVFP4 (NVIDIA) + MTP ──────────────────────────────────
   vllm-gemma-large:
-    <<: *vllm-gemma4
+    <<: *vllm-nightly
     container_name: vllm-gemma-large
-    environment:
-      - HF_TOKEN=${HF_TOKEN}
-      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
-      - HF_HOME=/model-cache
-      # Required for NVFP4 quantization: use Marlin kernel for non-MoE layers.
-      # Without this, GEMM operations fall back to an incorrect path on SM 12.1.
-      - VLLM_NVFP4_GEMM_BACKEND=marlin
-    volumes:
-      - ${MODEL_CACHE_PATH}:/model-cache
-      # The included gemma4_patched.py fixes vLLM's expert_params_mapping for
-      # NVFP4 scale keys. Download it from the model repo and place it alongside
-      # your docker-compose.yml. Without this patch, MoE scale keys are silently
-      # mis-mapped and outputs will be incorrect.
-      - ./gemma4_patched.py:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/gemma4.py
-
     ports:
       - "8001:8000"
     command: >
-      ${GEMMA_LARGE_MODEL}
+      ${C2_GEMMA_26B}
       --served-model-name gemma-4-26B-A4B-it
       --host 0.0.0.0
       --port 8000
       --tensor-parallel-size 1
-      --max-model-len 131072
+      --max-model-len 32768
       --gpu-memory-utilization 0.50
-      --quantization modelopt
       --dtype auto
       --enable-prefix-caching
-      --enable-chunked-prefill
       --max-num-batched-tokens 8192
       --trust-remote-code
-      --max-num-seqs 6
-      --moe-backend marlin
-      --kv-cache-dtype fp8
+      --max-num-seqs 4
+      --speculative-config '{"model":"${C2_GEMMA_26B_ASSISTANT}","num_speculative_tokens":3}'
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
-      retries: 8
-      start_period: 180s
+      retries: 10
+      start_period: 240s
 
   # ── E2B QAT compressed-tensors + MTP ──────────────────────────────
   vllm-gemma-extra-small:
@@ -170,7 +136,7 @@ services:
       --port 8000
       --task embedding
       --dtype bfloat16
-      --gpu-memory-utilization 0.08
+      --gpu-memory-utilization 0.12
       --trust-remote-code
       --max-model-len 32768
     healthcheck:
@@ -180,9 +146,6 @@ services:
       retries: 5
       start_period: 120s
 
-  # ─────────────────────────────────────────────
-  # NGINX Reverse Proxy
-  # ─────────────────────────────────────────────
   nginx:
     image: nginx:alpine
     container_name: nginx-proxy

@@ -171,7 +171,98 @@ curl -s http://localhost:9090/api/v1/targets | jq '.data.activeTargets[].labels'
 
 ---
 
-## How model routing works
+## Alternative inference stacks (`inference/docker-compose.alt1-4.yml`)
+
+Four **drop-in replacement** stacks for benchmarking and experimenting with
+different inference strategies. All use the same served-model-names — LiteLLM
+and Prometheus/Grafana monitoring work against any stack without changes.
+
+> ⚠️ **Only one inference stack can run at a time on the Spark.**
+> Stop the current stack first: `docker compose -f inference/docker-compose.yml down`
+
+### Config 1 — Community NVFP4 baseline (`docker-compose.alt1.yml`)
+
+The simplest path to W4A4 quantized serving for both Gemma models with **no
+speculative decoding**. Baseline to benchmark the other configs against.
+
+| Service | Model | Quantization | Image |
+|---|---|---|---|
+| `vllm-gemma-large` | Community NVFP4 26B A4B (bg-digitalservices) | W4A4 modelopt | `vllm/vllm-openai:gemma4-cu130` |
+| `vllm-gemma-extra-small` | Community NVFP4 E2B (bg-digitalservices) | W4A4 modelopt | `vllm/vllm-openai:gemma4-cu130` |
+
+Requires the `gemma4_patched.py` MoE scale-key fix mounted for the 26B model
+(same as the default stack). E2B needs no patch.
+
+### Config 2 — MTP speculative decoding (`docker-compose.alt2.yml`)
+
+Multi-Token Prediction for both models. Uses the official NVIDIA NVFP4
+quantization for 26B (no patch needed) paired with a Gemma4 assistant drafter;
+QAT compressed-tensors for E2B with its own MTP assistant.
+
+| Service | Model | Quantization | Drafter | Image |
+|---|---|---|---|---|
+| `vllm-gemma-large` | NVIDIA NVFP4 26B A4B | W4A4 auto-detect | google/gemma-4-26B-A4B-it-assistant | `vllm/vllm-openai:nightly-aarch64` |
+| `vllm-gemma-extra-small` | QAT E2B | w4a16 compressed-tensors | google/gemma-4-E2B-it-qat-w4a16-unquantized-assistant | `vllm/vllm-openai:nightly-aarch64` |
+
+MTP boosts short-input/long-output decode throughput (~55-61 tok/s vs ~32
+tok/s for 26B), but **hurts** long-prefill/short-output workloads.
+`num_speculative_tokens=3` is a starting point — sweep upward for your workload.
+
+### Config 3 — DFlash + ParoQuant (`docker-compose.alt3.yml`)
+
+DFlash block-diffusion speculative decoding for 26B with an FP8 online-quantized
+target, plus ParoQuant INT4 serving for E2B. Maximizes Z-Lab's efficiency tech.
+
+| Service | Model | Quantization | Drafter / Runtime | Image |
+|---|---|---|---|---|
+| `vllm-gemma-large` | google/gemma-4-26B-A4B-it | Online FP8 | DFlash (z-lab/gemma-4-26B-A4B-it-DFlash) | `ghcr.io/z-lab/vllm-openai:gemma4-dflash-cu130` |
+| `vllm-gemma-extra-small` | E2B | INT4 paroquant | ParoQuant runtime | `ghcr.io/z-lab/paroquant:serve` |
+
+DFlash generates 15 speculative tokens per draft step. Uses `triton_attn` for the
+target, `flash_attn` for the drafter. Gemma4 tool-call and reasoning parsers are
+enabled on the 26B model.
+
+### Config 4 — DiffusionGemma + QAT E2B (`docker-compose.alt4.yml`)
+
+Block-diffusion generation for 26B with the NVIDIA DiffusionGemma NVFP4 model,
+paired with QAT compressed-tensors E2B.
+
+| Service | Model | Quantization | Image |
+|---|---|---|---|
+| `vllm-gemma-large` | NVIDIA DiffusionGemma 26B A4B NVFP4 | W4A4 auto-detect | `vllm/vllm-openai:gemma` |
+| `vllm-gemma-extra-small` | QAT E2B | w4a16 compressed-tensors | `vllm/vllm-openai:gemma4-cu130` |
+
+DiffusionGemma generates 128-token blocks via iterative denoising instead of
+autoregressive token-by-token. Higher time-to-first-token, significantly higher
+per-request throughput. Requires `--max-num-seqs 4` to keep noise buffers within
+VRAM budget. Enables Gemma4 tool-call and reasoning parsers.
+
+### Launching an alternative stack
+
+```bash
+# 1. Stop whatever is running
+docker compose -f inference/docker-compose.yml down
+# (or docker-compose.alt1-4.yml if another alt is active)
+
+# 2. Launch the desired config
+docker compose -f inference/docker-compose.alt2.yml up -d
+
+# 3. Wait for healthy
+docker compose -f inference/docker-compose.alt2.yml ps
+# Look for "(healthy)" — MTP/diffusion stacks may take 3-5 min on first start
+```
+
+Verification is identical to the default stack — same models, same paths:
+
+```bash
+curl http://localhost:80/health
+curl http://localhost:80/v1/models | jq
+curl http://localhost:80/gemma-4-26B-A4B-it/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"Hi!"}]}'
+```
+
+---
 
 The first path segment is the model name. NGINX rewrites the URL (stripping the
 prefix) and forwards to the correct vLLM backend:
@@ -363,3 +454,22 @@ harmless and doesn't affect DGX monitoring.
 - **GPU driver version is locked to ~580.x**: The standard vLLM image
   (`25.12-py3`) was chosen for compatibility. Don't upgrade the image without
   checking the driver requirements.
+
+- **Config 2 (MTP): Gemma 4 26B NVFP4 quant may be broken**. The 26B model
+  uses NVIDIA's official NVFP4 quantization paired with an MTP assistant
+  drafter. There is a known incompatibility between NVFP4's tied
+  word-embeddings and the MTP draft head — `tie_word_embeddings:true` on the
+  target can cause a `NotImplementedError` during MTP setup, while overriding
+  it with `--hf-overrides` to `false` breaks the shared-embedding handoff to
+  the drafter, resulting in 0% token acceptance. This is an upstream
+  incompatibility; track vLLM progress on NVFP4 + MTP support.
+
+- **Config 3 (DFlash + ParoQuant): not currently runnable**. This config
+  requires Docker images that simultaneously support the new Gemma 4 model
+  architecture and the DFlash speculative decoding / ParoQuant runtime.
+  The DFlash image (`ghcr.io/z-lab/vllm-openai:gemma4-dflash-cu130`) needs
+  aarch64 availability confirmed; the ParoQuant image
+  (`ghcr.io/z-lab/paroquant:serve`) requires the `paroquant` package with
+  vLLM integration. As of writing, no single image or compatible image pair
+  has been validated on the DGX Spark for this combination. The compose file
+  is kept as a reference target for when these upstream blockers are resolved.

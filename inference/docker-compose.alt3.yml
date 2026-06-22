@@ -1,0 +1,191 @@
+# Config 3 — DFlash (26B, FP8-quantized target) + ParoQuant (E2B), maximizing Z-Lab tech.
+#
+# WHY FP8 (not bf16): Spark is memory-bandwidth-bound, so an unquantized 26B target
+# wastes the whole point of DFlash. The DFlash drafter (~0.4B) is independent of the
+# target's WEIGHT quantization — it shares only embeddings + LM head — so FP8/NVFP4
+# target weights are fully compatible. Online FP8 (--quantization fp8) is proven on
+# Spark for DFlash (eugr/spark-vllm-docker recipes).
+#
+# KV-CACHE caveat: DFlash's drafter uses non-causal attention; quantized KV in
+# non-causal mode is fragile (vLLM PR #42102 fix was closed). Try fp8 KV first; if it
+# errors on the drafter path, fall back to --kv-cache-dtype auto (FP8 weights stay,
+# bf16 KV) — most of the bandwidth win is in the weights anyway.
+#
+# IMAGE: z-lab publishes a prebuilt DFlash image. Confirm aarch64 availability;
+# otherwise build via eugr/spark-vllm-docker (--vllm-ref refs/pull/41703/head -t dflash --tf5).
+#
+# PARO E2B: needs the paroquant runtime (ghcr.io/z-lab/paroquant:serve) or a vLLM
+# image with `pip install paroquant[vllm]`. --language-model-only skips vision weights.
+#
+# Launch: docker compose -f docker-compose.bench3-dflash-paro.yml up -d
+name: dgx-inference
+
+x-gpu-resources: &gpu-resources
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            capabilities: [gpu]
+
+x-vllm-standard: &vllm-standard
+  image: nvcr.io/nvidia/vllm:25.12-py3
+  restart: unless-stopped
+  environment:
+    - HF_TOKEN=${HF_TOKEN}
+    - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+    - HF_HOME=/model-cache
+  volumes:
+    - ${MODEL_CACHE_PATH}:/model-cache
+  ipc: host
+  ulimits:
+    memlock: -1
+    stack: 67108864
+  <<: *gpu-resources
+
+services:
+
+  # ── 26B (FP8 online-quantized) + DFlash drafter ───────────────────
+  vllm-gemma-large:
+    image: ghcr.io/z-lab/vllm-openai:gemma4-dflash-cu130   # confirm aarch64; else eugr Spark build
+    restart: unless-stopped
+    container_name: vllm-gemma-large
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+      - HF_HOME=/model-cache
+    volumes:
+      - ${MODEL_CACHE_PATH}:/model-cache
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    <<: *gpu-resources
+    ports:
+      - "8001:8000"
+    command: >
+      ${C3_GEMMA_26B}
+      --served-model-name gemma-4-26B-A4B-it
+      --host 0.0.0.0
+      --port 8000
+      --tensor-parallel-size 1
+      --max-model-len 32768
+      --gpu-memory-utilization 0.50
+      --quantization fp8
+      --kv-cache-dtype fp8
+      --enable-prefix-caching
+      --enable-auto-tool-choice
+      --tool-call-parser gemma4
+      --reasoning-parser gemma4
+      --attention-backend triton_attn
+      --max-num-batched-tokens 32768
+      --trust-remote-code
+      --max-num-seqs 4
+      --speculative-config '{"method":"dflash","model":"${C3_GEMMA_26B_DFLASH}","num_speculative_tokens":15,"attention_backend":"flash_attn"}'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 12
+      start_period: 300s
+
+  # ── E2B ParoQuant (INT4) ──────────────────────────────────────────
+  vllm-gemma-extra-small:
+    image: ghcr.io/z-lab/paroquant:serve   # or a vLLM image w/ paroquant[vllm] installed
+    restart: unless-stopped
+    container_name: vllm-gemma-extra-small
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+      - HF_HOME=/model-cache
+    volumes:
+      - ${MODEL_CACHE_PATH}:/model-cache
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    <<: *gpu-resources
+    ports:
+      - "8004:8000"
+    # NOTE: confirm paroquant:serve's entrypoint. If it wraps `vllm serve`, these
+    # flags apply; if it's `python -m paroquant.cli.serve`, adapt accordingly.
+    command: >
+      ${C3_GEMMA_E2B}
+      --served-model-name gemma-4-E2B-it
+      --host 0.0.0.0
+      --port 8000
+      --tensor-parallel-size 1
+      --max-model-len 32768
+      --gpu-memory-utilization 0.20
+      --language-model-only
+      --trust-remote-code
+      --max-num-seqs 64
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 8
+      start_period: 180s
+
+  vllm-embed-e5:
+    <<: *vllm-standard
+    container_name: vllm-embed-e5
+    ports:
+      - "8003:8000"
+    command: >
+      vllm serve ${EMBED_MODEL_1}
+      --served-model-name multilingual-e5-large
+      --host 0.0.0.0
+      --port 8000
+      --task embedding
+      --dtype bfloat16
+      --gpu-memory-utilization 0.08
+      --trust-remote-code
+      --max-model-len 512
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  vllm-embed-jina:
+    <<: *vllm-standard
+    container_name: vllm-embed-jina
+    ports:
+      - "8005:8000"
+    command: >
+      vllm serve ${EMBED_MODEL_2}
+      --served-model-name jina-v5-small
+      --host 0.0.0.0
+      --port 8000
+      --task embedding
+      --dtype bfloat16
+      --gpu-memory-utilization 0.12
+      --trust-remote-code
+      --max-model-len 32768
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  nginx:
+    image: nginx:alpine
+    container_name: nginx-proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "10.57.5.14:9100:9100"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      vllm-gemma-large:
+        condition: service_healthy
+      vllm-gemma-extra-small:
+        condition: service_healthy
+      vllm-embed-e5:
+        condition: service_healthy
+      vllm-embed-jina:
+        condition: service_healthy
