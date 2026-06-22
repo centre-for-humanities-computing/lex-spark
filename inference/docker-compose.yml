@@ -28,6 +28,21 @@ x-vllm-gemma4: &vllm-gemma4
     stack: 67108864
   <<: *gpu-resources
 
+x-vllm-nightly: &vllm-nightly
+  image: vllm/vllm-openai:nightly-aarch64
+  restart: unless-stopped
+  environment:
+    - HF_TOKEN=${HF_TOKEN}
+    - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+    - HF_HOME=/model-cache
+  volumes:
+    - ${MODEL_CACHE_PATH}:/model-cache
+  ipc: host
+  ulimits:
+    memlock: -1
+    stack: 67108864
+  <<: *gpu-resources
+
 # ── Standard NVIDIA vLLM base ─────────────────────────────────────────────────
 # 26.02-py3 requires driver >=590.48 — host has 580.142, use 25.12-py3 instead.
 # 25.12-py3 is based on CUDA 13.1.0 which is compatible with driver 580.x.
@@ -83,7 +98,7 @@ services:
       --enable-chunked-prefill
       --max-num-batched-tokens 8192
       --trust-remote-code
-      --max-num-seqs 32
+      --max-num-seqs 6
       --moe-backend marlin
       --kv-cache-dtype fp8
     healthcheck:
@@ -93,32 +108,33 @@ services:
       retries: 8
       start_period: 180s
 
-  # ── Gemma 4 E2B (Dense) — fast/lightweight model ──────────────────────────
+  # ── E2B QAT compressed-tensors + MTP ──────────────────────────────
   vllm-gemma-extra-small:
-    <<: *vllm-gemma4
+    <<: *vllm-nightly
     container_name: vllm-gemma-extra-small
     ports:
       - "8004:8000"
     command: >
-      ${GEMMA_EXTRA_SMALL_MODEL}
+      ${C2_GEMMA_E2B}
       --served-model-name gemma-4-E2B-it
       --host 0.0.0.0
       --port 8000
       --tensor-parallel-size 1
-      --max-model-len 16384
-      --gpu-memory-utilization 0.15
-      --dtype bfloat16
-      --kv-cache-dtype auto
+      --max-model-len 32768
+      --gpu-memory-utilization 0.20
+      --dtype auto
+      --kv-cache-dtype fp8
       --enable-prefix-caching
       --max-num-batched-tokens 8192
       --trust-remote-code
       --max-num-seqs 64
+      --speculative-config '{"model":"${C2_GEMMA_E2B_ASSISTANT}","num_speculative_tokens":3}'
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 8
-      start_period: 90s
+      start_period: 180s
 
   vllm-embed-e5:
     <<: *vllm-standard

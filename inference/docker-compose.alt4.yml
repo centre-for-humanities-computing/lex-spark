@@ -68,8 +68,10 @@ services:
       --host 0.0.0.0
       --port 8000
       --tensor-parallel-size 1
-      --max-model-len 32768
+      --max-model-len 131072
+      --max-num-batched-tokens 8192
       --gpu-memory-utilization 0.55
+      --dtype auto
       --trust-remote-code
       --max-num-seqs 4
       --attention-backend TRITON_ATTN
@@ -77,8 +79,7 @@ services:
       --tool-call-parser gemma4
       --reasoning-parser gemma4
       --override-generation-config '{"max_new_tokens": null}'
-      --diffusion-config '{"canvas_length": 128, "max_denoising_steps": 24}'
-      --hf-overrides '{"diffusion_sampler":"entropy_bound","diffusion_entropy_bound":0.1}'
+      --diffusion-config '{"canvas_length": 256, "max_denoising_steps": 48}'
       --default-chat-template-kwargs '{"enable_thinking":false}'
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
