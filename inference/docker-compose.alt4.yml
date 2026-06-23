@@ -67,10 +67,9 @@ services:
       --served-model-name gemma-4-26B-A4B-it
       --host 0.0.0.0
       --port 8000
-      --tensor-parallel-size 1
       --max-model-len 65536
       --max-num-batched-tokens 8192
-      --gpu-memory-utilization 0.55
+      --gpu-memory-utilization 0.60
       --dtype auto
       --trust-remote-code
       --max-num-seqs 4
@@ -81,6 +80,7 @@ services:
       --override-generation-config '{"max_new_tokens": null}'
       --diffusion-config '{"canvas_length": 256, "max_denoising_steps": 48}'
       --default-chat-template-kwargs '{"enable_thinking":false}'
+      -tp 1
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
