@@ -5,14 +5,13 @@ global:
     host: dgx-spark
 
 scrape_configs:
-  # ── vLLM backends via nginx metrics listener ────────────────────
-  # Scraped through nginx on port 9100 (internal Docker network).
-  # Metrics are also available on port 80 for external consumers.
+  # ── vLLM backends via nginx on port 80 ─────────────────────────
+  # Prometheus scrapes through nginx on the shared Docker network.
   - job_name: vllm-gemma-large
     metrics_path: /metrics/gemma-4-26B-A4B-it
     scrape_interval: 5s   # faster for the model we actively route on
     static_configs:
-      - targets: ['nginx:9100']
+      - targets: ['nginx:80']
         labels:
           model: gemma-4-26B-A4B-it
           tier: large
@@ -20,7 +19,7 @@ scrape_configs:
   - job_name: vllm-gemma-e2b
     metrics_path: /metrics/gemma-4-E2B-it
     static_configs:
-      - targets: ['nginx:9100']
+      - targets: ['nginx:80']
         labels:
           model: gemma-4-E2B-it
           tier: small
@@ -28,7 +27,7 @@ scrape_configs:
   - job_name: vllm-embed-e5
     metrics_path: /metrics/multilingual-e5-large
     static_configs:
-      - targets: ['nginx:9100']
+      - targets: ['nginx:80']
         labels:
           model: multilingual-e5-large
           tier: embedding
@@ -36,7 +35,7 @@ scrape_configs:
   - job_name: vllm-embed-jina
     metrics_path: /metrics/jina-v5-small
     static_configs:
-      - targets: ['nginx:9100']
+      - targets: ['nginx:80']
         labels:
           model: jina-v5-small
           tier: embedding

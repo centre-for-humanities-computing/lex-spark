@@ -164,9 +164,12 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
-      - "10.57.5.14:9100:9100"
+    environment:
+      - AUTH_TOKEN=${AUTH_TOKEN}
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
+      - ./nginx/entrypoint.sh:/docker-entrypoint.sh:ro
+    entrypoint: ["/docker-entrypoint.sh"]
     depends_on:
       vllm-gemma-large:
         condition: service_healthy

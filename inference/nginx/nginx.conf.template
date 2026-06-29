@@ -1,0 +1,163 @@
+worker_processes auto;
+error_log /var/log/nginx/error.log warn;
+pid /var/run/nginx.pid;
+
+events {
+    worker_connections 4096;
+    use epoll;
+}
+
+http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+
+    # Docker's embedded DNS resolver. Using a variable in proxy_pass
+    # forces nginx to re-resolve at request time instead of caching
+    # the IP at startup — prevents 502/404 after container restarts.
+    resolver 127.0.0.11 valid=10s ipv6=off;
+
+    log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                      '$status $body_bytes_sent "$http_referer" '
+                      '"$http_user_agent" rt=$request_time';
+    access_log  /var/log/nginx/access.log  main;
+
+    sendfile        on;
+    tcp_nopush      on;
+    tcp_nodelay     on;
+    keepalive_timeout 300s;
+
+    proxy_buffering         off;
+    proxy_read_timeout      600s;
+    proxy_send_timeout      600s;
+    proxy_connect_timeout   30s;
+
+    client_max_body_size    64m;
+    gzip                    off;
+
+    # ── Auth: validate X-Auth-Token header ────────────────────────
+    # __AUTH_TOKEN__ is replaced by entrypoint.sh at container start.
+    # If the env var is unset, entrypoint substitutes a random sentinel
+    # so the map always falls through to default=0 (reject all).
+    map $http_x_auth_token $auth_ok {
+        default           0;
+        "__AUTH_TOKEN__" 1;
+    }
+
+    # ── Metrics upstream routing map ──────────────────────────────
+    # Values are host:port, resolved at request time via resolver.
+    map $uri $metrics_upstream {
+        /metrics/gemma-4-26B-A4B-it   vllm-gemma-large:8000;
+        /metrics/gemma-4-E2B-it         vllm-gemma-extra-small:8000;
+        /metrics/multilingual-e5-large  vllm-embed-e5:8000;
+        /metrics/jina-v5-small          vllm-embed-jina:8000;
+    }
+
+    # ── Public server ─────────────────────────────────────────────
+
+    server {
+        listen 80;
+        server_name _;
+
+        # ── Common proxy headers (inherited by all locations) ─────
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header Connection        "";
+
+        # ── Nginx health check ────────────────────
+        location = /health {
+            access_log off;
+            default_type application/json;
+            return 200 '{"status":"ok"}';
+        }
+
+        # ── Aggregated /v1/models for LiteLLM introspection ───────
+        location = /v1/models {
+            access_log off;
+            default_type application/json;
+            return 200 '{"object":"list","data":[
+                {"id":"gemma-4-26B-A4B-it","object":"model","owned_by":"vllm"},
+                {"id":"gemma-4-E2B-it","object":"model","owned_by":"vllm"},
+                {"id":"multilingual-e5-large","object":"model","owned_by":"vllm"},
+                {"id":"jina-v5-small","object":"model","owned_by":"vllm"}
+            ]}';
+        }
+
+        # ── Inference: Gemma 4 26B (streaming) ────────────────────
+        location /gemma-4-26B-A4B-it/ {
+            if ($auth_ok != 1) {
+                default_type application/json;
+                return 401 '{"error":"Missing or invalid X-Auth-Token"}';
+            }
+            rewrite ^/gemma-4-26B-A4B-it/(.*) /$1 break;
+            set $up_gemma_large vllm-gemma-large:8000;
+            proxy_pass http://$up_gemma_large;
+            proxy_request_buffering off;
+            chunked_transfer_encoding on;
+        }
+
+        # ── Inference: Gemma 4 E2B (streaming) ────────────────────
+        location /gemma-4-E2B-it/ {
+            if ($auth_ok != 1) {
+                default_type application/json;
+                return 401 '{"error":"Missing or invalid X-Auth-Token"}';
+            }
+            rewrite ^/gemma-4-E2B-it/(.*) /$1 break;
+            set $up_gemma_e2b vllm-gemma-extra-small:8000;
+            proxy_pass http://$up_gemma_e2b;
+            proxy_request_buffering off;
+            chunked_transfer_encoding on;
+        }
+
+        # ── Inference: E5 embeddings ──────────────────────────────
+        location /multilingual-e5-large/ {
+            if ($auth_ok != 1) {
+                default_type application/json;
+                return 401 '{"error":"Missing or invalid X-Auth-Token"}';
+            }
+            rewrite ^/multilingual-e5-large/(.*) /$1 break;
+            set $up_embed_e5 vllm-embed-e5:8000;
+            proxy_pass http://$up_embed_e5;
+        }
+
+        # ── Inference: Jina embeddings ────────────────────────────
+        location /jina-v5-small/ {
+            if ($auth_ok != 1) {
+                default_type application/json;
+                return 401 '{"error":"Missing or invalid X-Auth-Token"}';
+            }
+            rewrite ^/jina-v5-small/(.*) /$1 break;
+            set $up_embed_jina vllm-embed-jina:8000;
+            proxy_pass http://$up_embed_jina;
+        }
+
+        # ── Metrics (no auth — scraped by Prometheus) ─────────────
+        location = /up {
+            access_log off;
+            return 200 'ok';
+            add_header Content-Type text/plain;
+        }
+
+        location ~ ^/metrics/(gemma-4-26B-A4B-it|gemma-4-E2B-it|multilingual-e5-large|jina-v5-small)$ {
+            access_log off;
+            # $metrics_upstream is a variable → forces request-time DNS resolution
+            proxy_pass http://$metrics_upstream/metrics;
+            proxy_connect_timeout 2s;
+            proxy_read_timeout    5s;
+            proxy_send_timeout    5s;
+        }
+
+        location = /metrics/ {
+            access_log off;
+            default_type text/plain;
+            return 200 "vLLM metrics endpoints:\n  /metrics/gemma-4-26B-A4B-it\n  /metrics/gemma-4-E2B-it\n  /metrics/multilingual-e5-large\n  /metrics/jina-v5-small\n  /up (liveness)\n";
+        }
+
+        # ── Catch-all ─────────────────────────────
+        location / {
+            default_type application/json;
+            return 404 '{"error":"Unknown route. Use /{model}/v1/chat/completions, /{model}/v1/embeddings, /{model}/v1/completions with a valid model name."}';
+        }
+    }
+}
