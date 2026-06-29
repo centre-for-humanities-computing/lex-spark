@@ -97,6 +97,7 @@ services:
       --enable-prefix-caching
       --enable-chunked-prefill
       --max-num-batched-tokens 8192
+      --kv-cache-dtype fp8
       --trust-remote-code
       --max-num-seqs 6
       --moe-backend marlin
@@ -126,6 +127,7 @@ services:
       --max-num-batched-tokens 8192
       --trust-remote-code
       --max-num-seqs 64
+      --kv-cache-dtype fp8
       --speculative-config '{"model":"${C2_GEMMA_E2B_ASSISTANT}","num_speculative_tokens":3}'
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
