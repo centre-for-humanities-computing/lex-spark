@@ -1,7 +1,13 @@
-# docker-compose.yml
+# Config 5 — Gemma 4 26B FP8 Dynamic + MTP (RedHatAI quant, PR #41745 patched gemma4_mtp.py).
+# Based on the blog recipe: 108 tok/s single-stream, 674 tok/s aggregate @ concurrency=8.
+# Uses the gemma4-0505-arm64-cu130 preview image + bind-mounted gemma4_mtp.py patch.
+# Once PR #41745 merges into an official image, the bind-mount is no longer needed.
+#
+# E2B and embedding models are carried over from the main docker-compose.yml.
+#
+# Launch: docker compose -f docker-compose.alt5.yml up -d
 name: dgx-inference
 
-# ── Shared GPU resource definition ───────────────────────────────────────────
 x-gpu-resources: &gpu-resources
   deploy:
     resources:
@@ -10,11 +16,9 @@ x-gpu-resources: &gpu-resources
           - driver: nvidia
             capabilities: [gpu]
 
-# ── Gemma 4 vLLM base ─────────────────────────────────────────────────────────
-# The gemma4-cu130 custom image is required for the Gemma 4 model family.
-# It does NOT support general embedding models.
-x-vllm-gemma4: &vllm-gemma4
-  image: vllm/vllm-openai:gemma4-cu130
+# ── Gemma 4 0505 preview image (needed for FP8 + MTP on this specific build) ──
+x-vllm-gemma4-0505: &vllm-gemma4-0505
+  image: vllm/vllm-openai:gemma4-0505-arm64-cu130
   restart: unless-stopped
   environment:
     - HF_TOKEN=${HF_TOKEN}
@@ -43,9 +47,6 @@ x-vllm-nightly: &vllm-nightly
     stack: 67108864
   <<: *gpu-resources
 
-# ── Standard NVIDIA vLLM base ─────────────────────────────────────────────────
-# 26.02-py3 requires driver >=590.48 — host has 580.142, use 25.12-py3 instead.
-# 25.12-py3 is based on CUDA 13.1.0 which is compatible with driver 580.x.
 x-vllm-standard: &vllm-standard
   image: nvcr.io/nvidia/vllm:25.12-py3
   restart: unless-stopped
@@ -63,52 +64,48 @@ x-vllm-standard: &vllm-standard
 
 services:
 
-  # ── Gemma 4 26B A4B (MoE) — large/capable model ──────────────────────────
+  # ── Gemma 4 26B A4B FP8 Dynamic + MTP ─────────────────────────────
+  # GPU memory: 0.60 (reduced from blog's 0.85 to leave room for E2B + embeddings).
+  # If running this model alone, bump to 0.85 for max throughput.
   vllm-gemma-large:
-    <<: *vllm-gemma4
+    <<: *vllm-gemma4-0505
     container_name: vllm-gemma-large
-    environment:
-      - HF_TOKEN=${HF_TOKEN}
-      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
-      - HF_HOME=/model-cache
-      # Required for NVFP4 quantization: use Marlin kernel for non-MoE layers.
-      # Without this, GEMM operations fall back to an incorrect path on SM 12.1.
-      - VLLM_NVFP4_GEMM_BACKEND=marlin
     volumes:
       - ${MODEL_CACHE_PATH}:/model-cache
-      # The included gemma4_patched.py fixes vLLM's expert_params_mapping for
-      # NVFP4 scale keys. Download it from the model repo and place it alongside
-      # your docker-compose.yml. Without this patch, MoE scale keys are silently
-      # mis-mapped and outputs will be incorrect.
-      - ./gemma4_patched.py:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/gemma4.py
-
+      # gemma4_mtp.py patch from vLLM PR #41745 (SHA d8b3826).
+      # Download once:
+      #   wget https://raw.githubusercontent.com/vllm-project/vllm/d8b3826648da6b407f8c55457a2103be9aeb5d83/vllm/model_executor/models/gemma4_mtp.py \
+      #     -O ./gemma4_mtp.py
+      # Remove this mount after PR #41745 merges into an official image.
+      - ./gemma4_mtp.py:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/gemma4_mtp.py:ro
     ports:
       - "8001:8000"
     command: >
-      ${GEMMA_LARGE_MODEL}
+      ${C5_GEMMA_26B}
       --served-model-name gemma-4-26B-A4B-it
       --host 0.0.0.0
       --port 8000
       --tensor-parallel-size 1
       --max-model-len 65536
-      --gpu-memory-utilization 0.50
-      --quantization modelopt
+      --gpu-memory-utilization 0.60
+      --kv-cache-dtype fp8
       --dtype auto
       --enable-prefix-caching
       --enable-chunked-prefill
       --max-num-batched-tokens 8192
-      --kv-cache-dtype fp8
       --trust-remote-code
-      --max-num-seqs 6
-      --moe-backend marlin
+      --max-num-seqs 10
+      --speculative-config '{"method":"mtp","model":"${C5_GEMMA_26B_ASSISTANT}","num_speculative_tokens":4}'
+      --limit-mm-per-prompt '{"image":0,"audio":0,"video":0}'
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
-      retries: 8
-      start_period: 180s
+      retries: 10
+      start_period: 240s
 
-  # ── E2B QAT compressed-tensors + MTP ──────────────────────────────
+  # ── E2B QAT compressed-tensors + MTP (from main docker-compose.yml) ─
+  # GPU memory: 0.15 (reduced from 0.20 to make room for the 26B FP8 model).
   vllm-gemma-extra-small:
     <<: *vllm-nightly
     container_name: vllm-gemma-extra-small
@@ -121,13 +118,12 @@ services:
       --port 8000
       --tensor-parallel-size 1
       --max-model-len 16384
-      --gpu-memory-utilization 0.20
+      --gpu-memory-utilization 0.15
       --dtype auto
       --enable-prefix-caching
       --max-num-batched-tokens 8192
       --trust-remote-code
       --max-num-seqs 64
-      --kv-cache-dtype fp8
       --speculative-config '{"model":"${C2_GEMMA_E2B_ASSISTANT}","num_speculative_tokens":3}'
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -136,6 +132,8 @@ services:
       retries: 8
       start_period: 180s
 
+  # ── Embedding: multilingual-e5-large ───────────────────────────────
+  # GPU memory: 0.06 (reduced from 0.08).
   vllm-embed-e5:
     <<: *vllm-standard
     container_name: vllm-embed-e5
@@ -148,7 +146,7 @@ services:
       --port 8000
       --task embedding
       --dtype bfloat16
-      --gpu-memory-utilization 0.08
+      --gpu-memory-utilization 0.05
       --trust-remote-code
       --max-model-len 512
     healthcheck:
@@ -158,6 +156,8 @@ services:
       retries: 5
       start_period: 90s
 
+  # ── Embedding: jina-v5-small ──────────────────────────────────────
+  # GPU memory: 0.08 (reduced from 0.12).
   vllm-embed-jina:
     <<: *vllm-standard
     container_name: vllm-embed-jina
@@ -170,7 +170,7 @@ services:
       --port 8000
       --task embedding
       --dtype bfloat16
-      --gpu-memory-utilization 0.12
+      --gpu-memory-utilization 0.10
       --trust-remote-code
       --max-model-len 32768
     healthcheck:
